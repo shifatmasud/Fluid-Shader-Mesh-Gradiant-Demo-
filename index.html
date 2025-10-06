@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fluid Shader Mesh</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        font-family: 'Manrope', sans-serif;
+        background-color: #0A0A0A;
+        color: #F5F5F5;
+        overflow: hidden; /* Prevent scrollbars */
+      }
+      /* lil-gui custom styling for a smooth, clean aesthetic */
+      .lil-gui.root {
+        --widget-color: #EAEAEA;
+        --background-color: rgba(10, 10, 10, 0.7);
+        --text-color: #EAEAEA;
+        --title-background-color: rgba(0, 0, 0, 0.2);
+        --font-size: 12px;
+        --input-font-size: 12px;
+        --border-radius: 12px;
+        --padding: 12px;
+        --widget-height: 24px;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .lil-gui.root .title {
+        color: #ffffff;
+        font-weight: bold;
+        letter-spacing: 0.5px;
+      }
+      .lil-gui .controller:not(.disabled) .name {
+         color: #a0a0a0;
+         font-weight: 300;
+      }
+      .lil-gui--width-goto {
+        right: 0 !important;
+      }
+      .lil-gui .controller.string input, .lil-gui .controller.number input {
+        border-radius: 6px;
+        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+       .lil-gui .controller > .widget {
+        border-radius: 6px;
+      }
+    </style>
+    <!-- ES Module Shims for import maps -->
+    <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+    "three/examples/jsm/": "https://unpkg.com/three@0.165.0/examples/jsm/",
+    "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "three/": "https://aistudiocdn.com/three@^0.180.0/"
+  }
+}
+</script>
+</head>
+<body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>

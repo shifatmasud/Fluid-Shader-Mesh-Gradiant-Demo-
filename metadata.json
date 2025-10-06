@@ -1,0 +1,5 @@
+{
+  "name": "Fluid Shader Mesh Gradiant (Demo)",
+  "description": "An interactive, fluid-like animated mesh gradient created with Three.js and controlled by a simple GUI. The visual effect simulates water waves with dynamic lighting and color, responding to user mouse movements.",
+  "requestFramePermissions": []
+}
