@@ -5,10 +5,12 @@ import type { ShaderUniforms } from '../types';
 
 // GLSL Shaders
 const vertexShader = `
+  precision mediump float;
+
   uniform float uTime;
   uniform vec2 uMouse;
   uniform float uCameraAspect;
-  uniform int uNoiseType; // 0: Perlin, 1: Simplex, 2: Worley
+  uniform int uNoiseType; // 0: Perlin, 1: Simplex, 2: Worley, 3: FBM, 4: Smooth
 
   uniform float uBigWavesElevation;
   uniform vec2 uBigWavesFrequency;
@@ -128,6 +130,19 @@ const vertexShader = `
     return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
   }
 
+  // Fractional Brownian Motion using Simplex Noise
+  float fbm(vec3 p) {
+      float total = 0.0;
+      float amplitude = 0.5;
+      float frequency = 1.0;
+      for (int i = 0; i < 6; i++) {
+          total += snoise(p * frequency) * amplitude;
+          frequency *= 2.0;
+          amplitude *= 0.5;
+      }
+      return total;
+  }
+
   // Worley Noise
   float worley(vec3 p) {
       vec3 p_int = floor(p);
@@ -146,21 +161,44 @@ const vertexShader = `
       }
       return min_dist;
   }
-  
+
+  // Smooth Noise by Inigo Quilez
+  vec3 hash( vec3 p ) {
+    p = vec3( dot(p,vec3(127.1,311.7, 74.7)),
+              dot(p,vec3(269.5,183.3,246.1)),
+              dot(p,vec3(113.5,271.9,124.6)));
+    return -1.0 + 2.0*fract(sin(p)*43758.5453123);
+  }
+  float smoothNoise(in vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f*f*(3.0-2.0*f);
+    return mix( mix( mix( dot( hash( i + vec3(0.0,0.0,0.0) ), f - vec3(0.0,0.0,0.0) ), 
+                           dot( hash( i + vec3(1.0,0.0,0.0) ), f - vec3(1.0,0.0,0.0) ), u.x),
+                      mix( dot( hash( i + vec3(0.0,1.0,0.0) ), f - vec3(0.0,1.0,0.0) ), 
+                           dot( hash( i + vec3(1.0,1.0,0.0) ), f - vec3(1.0,1.0,0.0) ), u.x), u.y),
+                 mix( mix( dot( hash( i + vec3(0.0,0.0,1.0) ), f - vec3(0.0,0.0,1.0) ), 
+                           dot( hash( i + vec3(1.0,0.0,1.0) ), f - vec3(1.0,0.0,1.0) ), u.x),
+                      mix( dot( hash( i + vec3(0.0,1.0,1.0) ), f - vec3(0.0,1.0,1.0) ), 
+                           dot( hash( i + vec3(1.0,1.0,1.0) ), f - vec3(1.0,1.0,1.0) ), u.x), u.y), u.z );
+  }
+
   float noise(vec3 p) {
     if (uNoiseType == 0) return cnoise(p);
     if (uNoiseType == 1) return snoise(p);
     if (uNoiseType == 2) return 1.0 - worley(p) * 2.0;
+    if (uNoiseType == 3) return fbm(p) * 2.0;
+    if (uNoiseType == 4) return smoothNoise(p) * 2.0;
     return 0.0;
   }
 
-  varying float vElevation;
+  varying float vWaveElevation;
 
   void main() {
     vec4 modelPosition = modelMatrix * vec4(position, 1.0);
 
     // Big waves
-    float elevation = noise(vec3(
+    float waveElevation = noise(vec3(
         modelPosition.x * uBigWavesFrequency.x + uTime * uBigWavesSpeed,
         modelPosition.y * uBigWavesFrequency.y + uTime * uBigWavesSpeed,
         uTime * 0.1
@@ -168,89 +206,126 @@ const vertexShader = `
 
     // Small waves (FBM)
     for(float i = 1.0; i <= uSmallWavesIterations; i++) {
-        elevation += noise(vec3(
+        waveElevation += snoise(vec3( // Use snoise for small waves for consistency
             modelPosition.x * uSmallWavesFrequency * i + uTime * uSmallWavesSpeed,
             modelPosition.y * uSmallWavesFrequency * i + uTime * uSmallWavesSpeed,
             uTime * 0.2
         )) * (uSmallWavesElevation / i);
     }
     
+    vWaveElevation = waveElevation;
+    
     // Mouse interaction
     float mouseDistance = distance(vec2(uMouse.x * (2.0 / uCameraAspect), uMouse.y * 2.0), modelPosition.xy);
     float mouseEffect = 1.0 - smoothstep(0.0, 0.4, mouseDistance);
-    elevation += mouseEffect * 0.15;
+    float totalElevation = waveElevation + mouseEffect * 0.15;
 
-    modelPosition.z = elevation;
-    vElevation = elevation;
+    modelPosition.z = totalElevation;
 
     gl_Position = projectionMatrix * viewMatrix * modelPosition;
   }
 `;
 
 const fragmentShader = `
+  precision mediump float;
+
   uniform vec3 uDepthColor;
   uniform vec3 uSurfaceColor;
   uniform float uColorOffset;
   uniform float uColorMultiplier;
 
-  varying float vElevation;
+  varying float vWaveElevation;
 
   void main() {
-    float mixStrength = (vElevation + uColorOffset) * uColorMultiplier;
+    float mixStrength = (vWaveElevation + uColorOffset) * uColorMultiplier;
     vec3 color = mix(uDepthColor, uSurfaceColor, mixStrength);
     gl_FragColor = vec4(color, 1.0);
   }
 `;
 
-const hexToRgb = (hex: string) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? {
-        r: parseInt(result[1], 16) / 255,
-        g: parseInt(result[2], 16) / 255,
-        b: parseInt(result[3], 16) / 255
-    } : { r: 0, g: 0, b: 0 };
-};
-
 let presets = {
-  "Cool Blue": {
+  "Serene Twilight": {
     noiseType: 1, // Simplex
     uBigWavesElevation: 0.05, uBigWavesFrequency: { x: 0.6, y: 0.4 }, uBigWavesSpeed: 0.03,
     uSmallWavesElevation: 0.04, uSmallWavesFrequency: 2.5, uSmallWavesSpeed: 0.1, uSmallWavesIterations: 4.0,
-    depthColor: '#0A2463', surfaceColor: '#ADD8E6', uColorOffset: 0.1, uColorMultiplier: 3.5,
+    depthColor: '#0c3483', surfaceColor: '#a2b6df', uColorOffset: 0.2, uColorMultiplier: 3.0,
   },
-  "Mystery Purple": {
-    noiseType: 0, // Perlin
-    uBigWavesElevation: 0.1, uBigWavesFrequency: { x: 0.2, y: 0.1 }, uBigWavesSpeed: 0.01,
-    uSmallWavesElevation: 0.02, uSmallWavesFrequency: 1.2, uSmallWavesSpeed: 0.04, uSmallWavesIterations: 5.0,
-    depthColor: '#240046', surfaceColor: '#C77DFF', uColorOffset: 0.25, uColorMultiplier: 4.0,
+  "Cherry Blossom": {
+    noiseType: 1, // Simplex
+    uBigWavesElevation: 0.04, uBigWavesFrequency: { x: 0.5, y: 0.4 }, uBigWavesSpeed: 0.03,
+    uSmallWavesElevation: 0.06, uSmallWavesFrequency: 2.5, uSmallWavesSpeed: 0.12, uSmallWavesIterations: 4.0,
+    depthColor: '#ff758c', surfaceColor: '#ffdde1', uColorOffset: 0.2, uColorMultiplier: 3.5,
   },
-  "Cherry Pink": {
+  "Warm Embrace": {
     noiseType: 1, // Simplex
     uBigWavesElevation: 0.03, uBigWavesFrequency: { x: 1.0, y: 0.8 }, uBigWavesSpeed: 0.06,
     uSmallWavesElevation: 0.05, uSmallWavesFrequency: 5.0, uSmallWavesSpeed: 0.2, uSmallWavesIterations: 4.0,
-    depthColor: '#D90368', surfaceColor: '#FFDDE2', uColorOffset: 0.05, uColorMultiplier: 3.0,
+    depthColor: '#E85A4F', surfaceColor: '#FFF4E0', uColorOffset: 0.25, uColorMultiplier: 2.0,
   },
-  "Soft Sunbeam": {
+  "Golden Hour": {
     noiseType: 0, // Perlin
     uBigWavesElevation: 0.02, uBigWavesFrequency: { x: 0.5, y: 0.5 }, uBigWavesSpeed: 0.025,
     uSmallWavesElevation: 0.04, uSmallWavesFrequency: 4.0, uSmallWavesSpeed: 0.15, uSmallWavesIterations: 3.0,
-    depthColor: '#FFC947', surfaceColor: '#FEF9E7', uColorOffset: 0.15, uColorMultiplier: 2.5,
+    depthColor: '#F09819', surfaceColor: '#FFFDE4', uColorOffset: 0.2, uColorMultiplier: 2.0,
   },
-  "Lush Grassland": {
+  "Misty Meadow": {
+    noiseType: 2, // Worley
+    uBigWavesElevation: 0.08, uBigWavesFrequency: { x: 0.3, y: 0.3 }, uBigWavesSpeed: 0.02,
+    uSmallWavesElevation: 0.04, uSmallWavesFrequency: 2.0, uSmallWavesSpeed: 0.05, uSmallWavesIterations: 3.0,
+    depthColor: '#01416d', surfaceColor: '#48b1bf', uColorOffset: 0.15, uColorMultiplier: 3.0,
+  },
+  "Calm Sea": {
     noiseType: 1, // Simplex
-    uBigWavesElevation: 0.06, uBigWavesFrequency: { x: 0.4, y: 0.2 }, uBigWavesSpeed: 0.02,
-    uSmallWavesElevation: 0.03, uSmallWavesFrequency: 3.0, uSmallWavesSpeed: 0.07, uSmallWavesIterations: 4.0,
-    depthColor: '#004B23', surfaceColor: '#C1FF72', uColorOffset: 0.2, uColorMultiplier: 3.0,
+    uBigWavesElevation: 0.03, uBigWavesFrequency: { x: 0.4, y: 0.3 }, uBigWavesSpeed: 0.02,
+    uSmallWavesElevation: 0.086, uSmallWavesFrequency: 3.5, uSmallWavesSpeed: 0.1, uSmallWavesIterations: 4.0,
+    depthColor: '#003973', surfaceColor: '#E5E5BE', uColorOffset: 0.15, uColorMultiplier: 3.0,
+  },
+  "Raging Storm": {
+    noiseType: 0, // Perlin
+    uBigWavesElevation: 0.25, uBigWavesFrequency: { x: 1.2, y: 1.5 }, uBigWavesSpeed: 0.2,
+    uSmallWavesElevation: 0.1, uSmallWavesFrequency: 6.0, uSmallWavesSpeed: 0.3, uSmallWavesIterations: 5.0,
+    depthColor: '#232526', surfaceColor: '#E6DADA', uColorOffset: 0.05, uColorMultiplier: 5.0,
+  },
+  "Cloud Scape": {
+    noiseType: 3, // FBM
+    uBigWavesElevation: 0.15, uBigWavesFrequency: { x: 0.5, y: 0.4 }, uBigWavesSpeed: 0.03,
+    uSmallWavesElevation: 0.0, uSmallWavesFrequency: 1.0, uSmallWavesSpeed: 0.0, uSmallWavesIterations: 1.0,
+    depthColor: '#4a6e8a', surfaceColor: '#d3e0ea', uColorOffset: 0.2, uColorMultiplier: 3.0,
+  },
+  "Silk Flow": {
+    noiseType: 4, // Smooth
+    uBigWavesElevation: 0.1, uBigWavesFrequency: { x: 0.7, y: 0.5 }, uBigWavesSpeed: 0.05,
+    uSmallWavesElevation: 0.03, uSmallWavesFrequency: 3.0, uSmallWavesSpeed: 0.1, uSmallWavesIterations: 3.0,
+    depthColor: '#6D4C41', surfaceColor: '#F5EBE0', uColorOffset: 0.3, uColorMultiplier: 2.5,
   },
 };
 type Preset = typeof presets[keyof typeof presets];
 type Presets = typeof presets;
+
+const qualitySettings = {
+    High: {
+        pixelRatio: Math.min(window.devicePixelRatio, 2),
+        geometrySegments: 256,
+        antialias: true,
+    },
+    Low: {
+        pixelRatio: 1,
+        geometrySegments: 128,
+        antialias: false,
+    },
+};
+type Quality = keyof typeof qualitySettings;
 
 const ShaderCanvas: React.FC = () => {
     const mountRef = useRef<HTMLDivElement>(null);
     
     useEffect(() => {
         if (!mountRef.current) return;
+
+        const isMobile = window.innerWidth < 768;
+        const perfParams = { quality: (isMobile ? 'Low' : 'High') as Quality };
+        const settings = qualitySettings[perfParams.quality];
+        let lastAppliedPreset: Preset = presets["Serene Twilight"];
 
         const currentMount = mountRef.current;
         const scene = new THREE.Scene();
@@ -259,14 +334,17 @@ const ShaderCanvas: React.FC = () => {
         camera.position.set(0, 0, 1.8);
         scene.add(camera);
         
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        const renderer = new THREE.WebGLRenderer({ 
+            antialias: settings.antialias, 
+            alpha: true,
+            powerPreference: 'high-performance'
+        });
         renderer.setSize(sizes.width, sizes.height);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setPixelRatio(settings.pixelRatio);
         currentMount.appendChild(renderer.domElement);
         
-        const waterColors = { depthColor: '#d1e0ff', surfaceColor: '#fff4e0' };
         const displacementParams = { type: 'Simplex' };
-        const noiseTypes = { Perlin: 0, Simplex: 1, Worley: 2 };
+        const noiseTypes = { Perlin: 0, Simplex: 1, Worley: 2, FBM: 3, Smooth: 4 };
         
         const uniforms: ShaderUniforms = {
             uTime: { value: 0 },
@@ -274,15 +352,15 @@ const ShaderCanvas: React.FC = () => {
             uCameraAspect: { value: camera.aspect },
             uNoiseType: { value: noiseTypes.Simplex },
             uBigWavesElevation: { value: 0.08 }, uBigWavesFrequency: { value: { x: 0.6, y: 0.4 } }, uBigWavesSpeed: { value: 0.04 },
-            uSmallWavesElevation: { value: 0.06 }, uSmallWavesFrequency: { value: 2.0 }, uSmallWavesSpeed: { value: 0.08 }, uSmallWavesIterations: { value: 3.0 },
-            uDepthColor: { value: hexToRgb(waterColors.depthColor) },
-            uSurfaceColor: { value: hexToRgb(waterColors.surfaceColor) },
+            uSmallWavesElevation: { value: 0.06 }, uSmallWavesFrequency: { value: 2.0 }, uSmallWavesSpeed: { value: 0.15 }, uSmallWavesIterations: { value: 3.0 },
+            uDepthColor: { value: new THREE.Color('#d1e0ff') },
+            uSurfaceColor: { value: new THREE.Color('#fff4e0') },
             uColorOffset: { value: 0.3 },
             uColorMultiplier: { value: 2.5 }
         };
 
         const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
-        const geometry = new THREE.PlaneGeometry(4.5, 4.5, 512, 512);
+        const geometry = new THREE.PlaneGeometry(4.5, 4.5, settings.geometrySegments, settings.geometrySegments);
         const mesh = new THREE.Mesh(geometry, material);
         mesh.rotation.x = -Math.PI * 0.35;
         scene.add(mesh);
@@ -290,6 +368,7 @@ const ShaderCanvas: React.FC = () => {
         const gui = new GUI();
         
         const applyPreset = (preset: Preset) => {
+            lastAppliedPreset = preset;
             uniforms.uNoiseType.value = preset.noiseType;
             displacementParams.type = Object.keys(noiseTypes).find(key => noiseTypes[key as keyof typeof noiseTypes] === preset.noiseType) || 'Simplex';
             uniforms.uBigWavesElevation.value = preset.uBigWavesElevation;
@@ -299,13 +378,17 @@ const ShaderCanvas: React.FC = () => {
             uniforms.uSmallWavesElevation.value = preset.uSmallWavesElevation;
             uniforms.uSmallWavesFrequency.value = preset.uSmallWavesFrequency;
             uniforms.uSmallWavesSpeed.value = preset.uSmallWavesSpeed;
-            uniforms.uSmallWavesIterations.value = preset.uSmallWavesIterations;
+            
+            if (perfParams.quality === 'Low') {
+                uniforms.uSmallWavesIterations.value = Math.min(preset.uSmallWavesIterations, 2.0);
+            } else {
+                uniforms.uSmallWavesIterations.value = preset.uSmallWavesIterations;
+            }
+
             uniforms.uColorOffset.value = preset.uColorOffset;
             uniforms.uColorMultiplier.value = preset.uColorMultiplier;
-            waterColors.depthColor = preset.depthColor;
-            waterColors.surfaceColor = preset.surfaceColor;
-            uniforms.uDepthColor.value = hexToRgb(preset.depthColor);
-            uniforms.uSurfaceColor.value = hexToRgb(preset.surfaceColor);
+            uniforms.uDepthColor.value.set(preset.depthColor);
+            uniforms.uSurfaceColor.value.set(preset.surfaceColor);
             gui.controllers.forEach((c) => c.updateDisplay());
         };
 
@@ -362,14 +445,22 @@ const ShaderCanvas: React.FC = () => {
             }
         };
 
+        const perfFolder = gui.addFolder('Performance');
+        perfFolder.add(perfParams, 'quality', ['High', 'Low']).name('Quality').onChange((value: Quality) => {
+            const newSettings = qualitySettings[value];
+            renderer.setPixelRatio(newSettings.pixelRatio);
+            applyPreset(lastAppliedPreset); // Re-apply to update iterations
+        });
+        perfFolder.open();
+
         gui.add(ioControls, 'importPresets').name('Import Presets');
         gui.add(ioControls, 'exportPresets').name('Export Presets');
         
         rebuildPresetsFolder(presets);
-        applyPreset(presets["Cool Blue"]);
+        applyPreset(presets["Serene Twilight"]);
         
         const displacementFolder = gui.addFolder('Displacement');
-        displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley']).name('algorithm').onChange((value: string) => {
+        displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
             uniforms.uNoiseType.value = noiseTypes[value as keyof typeof noiseTypes];
         });
 
@@ -386,8 +477,8 @@ const ShaderCanvas: React.FC = () => {
         smallWaveFolder.add(uniforms.uSmallWavesIterations, 'value', 1, 8, 1).name('iterations');
 
         const colorFolder = gui.addFolder('Colors');
-        colorFolder.addColor(waterColors, 'depthColor').name('depth').onChange((v: string) => uniforms.uDepthColor.value = hexToRgb(v));
-        colorFolder.addColor(waterColors, 'surfaceColor').name('surface').onChange((v: string) => uniforms.uSurfaceColor.value = hexToRgb(v));
+        colorFolder.addColor(uniforms.uDepthColor, 'value').name('depth');
+        colorFolder.addColor(uniforms.uSurfaceColor, 'value').name('surface');
         colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
         colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
 
@@ -407,7 +498,8 @@ const ShaderCanvas: React.FC = () => {
             camera.aspect = sizes.width / sizes.height;
             camera.updateProjectionMatrix();
             renderer.setSize(sizes.width, sizes.height);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            // On resize, we respect the current quality setting for pixel ratio
+            renderer.setPixelRatio(qualitySettings[perfParams.quality].pixelRatio);
             uniforms.uCameraAspect.value = camera.aspect;
         };
         window.addEventListener('mousemove', handleMouseMove);
