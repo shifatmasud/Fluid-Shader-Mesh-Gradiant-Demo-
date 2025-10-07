@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
-import GUI from 'lil-gui';
+// Fix: Import Controller type from lil-gui.
+import GUI, { Controller } from 'lil-gui';
 import type { ShaderUniforms } from '../types';
 
 // GLSL Shaders
@@ -239,6 +240,7 @@ const fragmentShader = `
   void main() {
     float mixStrength = (vWaveElevation + uColorOffset) * uColorMultiplier;
     vec3 color = mix(uDepthColor, uSurfaceColor, mixStrength);
+    
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -274,29 +276,17 @@ let presets = {
     uSmallWavesElevation: 0.04, uSmallWavesFrequency: 2.0, uSmallWavesSpeed: 0.05, uSmallWavesIterations: 3.0,
     depthColor: '#01416d', surfaceColor: '#48b1bf', uColorOffset: 0.15, uColorMultiplier: 3.0,
   },
-  "Calm Sea": {
-    noiseType: 1, // Simplex
-    uBigWavesElevation: 0.03, uBigWavesFrequency: { x: 0.4, y: 0.3 }, uBigWavesSpeed: 0.02,
-    uSmallWavesElevation: 0.086, uSmallWavesFrequency: 3.5, uSmallWavesSpeed: 0.1, uSmallWavesIterations: 4.0,
-    depthColor: '#003973', surfaceColor: '#E5E5BE', uColorOffset: 0.15, uColorMultiplier: 3.0,
-  },
-  "Raging Storm": {
-    noiseType: 0, // Perlin
-    uBigWavesElevation: 0.25, uBigWavesFrequency: { x: 1.2, y: 1.5 }, uBigWavesSpeed: 0.2,
-    uSmallWavesElevation: 0.1, uSmallWavesFrequency: 6.0, uSmallWavesSpeed: 0.3, uSmallWavesIterations: 5.0,
-    depthColor: '#232526', surfaceColor: '#E6DADA', uColorOffset: 0.05, uColorMultiplier: 5.0,
-  },
   "Cloud Scape": {
     noiseType: 3, // FBM
     uBigWavesElevation: 0.15, uBigWavesFrequency: { x: 0.5, y: 0.4 }, uBigWavesSpeed: 0.03,
     uSmallWavesElevation: 0.0, uSmallWavesFrequency: 1.0, uSmallWavesSpeed: 0.0, uSmallWavesIterations: 1.0,
     depthColor: '#4a6e8a', surfaceColor: '#d3e0ea', uColorOffset: 0.2, uColorMultiplier: 3.0,
   },
-  "Silk Flow": {
-    noiseType: 4, // Smooth
-    uBigWavesElevation: 0.1, uBigWavesFrequency: { x: 0.7, y: 0.5 }, uBigWavesSpeed: 0.05,
-    uSmallWavesElevation: 0.03, uSmallWavesFrequency: 3.0, uSmallWavesSpeed: 0.1, uSmallWavesIterations: 3.0,
-    depthColor: '#6D4C41', surfaceColor: '#F5EBE0', uColorOffset: 0.3, uColorMultiplier: 2.5,
+  "Emerald Tide": {
+    noiseType: 1, // Simplex
+    uBigWavesElevation: 0.06, uBigWavesFrequency: { x: 0.4, y: 0.3 }, uBigWavesSpeed: 0.04,
+    uSmallWavesElevation: 0.05, uSmallWavesFrequency: 3.0, uSmallWavesSpeed: 0.18, uSmallWavesIterations: 4.0,
+    depthColor: '#00796B', surfaceColor: '#69F0AE', uColorOffset: 0.25, uColorMultiplier: 3.5,
   },
 };
 type Preset = typeof presets[keyof typeof presets];
@@ -346,6 +336,11 @@ const ShaderCanvas: React.FC = () => {
         const displacementParams = { type: 'Simplex' };
         const noiseTypes = { Perlin: 0, Simplex: 1, Worley: 2, FBM: 3, Smooth: 4 };
         
+        const colorParams = {
+            depthColor: '#d1e0ff',
+            surfaceColor: '#fff4e0',
+        };
+
         const uniforms: ShaderUniforms = {
             uTime: { value: 0 },
             uMouse: { value: { x: 9999, y: 9999 } },
@@ -353,8 +348,8 @@ const ShaderCanvas: React.FC = () => {
             uNoiseType: { value: noiseTypes.Simplex },
             uBigWavesElevation: { value: 0.08 }, uBigWavesFrequency: { value: { x: 0.6, y: 0.4 } }, uBigWavesSpeed: { value: 0.04 },
             uSmallWavesElevation: { value: 0.06 }, uSmallWavesFrequency: { value: 2.0 }, uSmallWavesSpeed: { value: 0.15 }, uSmallWavesIterations: { value: 3.0 },
-            uDepthColor: { value: new THREE.Color('#d1e0ff') },
-            uSurfaceColor: { value: new THREE.Color('#fff4e0') },
+            uDepthColor: { value: new THREE.Color(colorParams.depthColor) },
+            uSurfaceColor: { value: new THREE.Color(colorParams.surfaceColor) },
             uColorOffset: { value: 0.3 },
             uColorMultiplier: { value: 2.5 }
         };
@@ -366,30 +361,33 @@ const ShaderCanvas: React.FC = () => {
         scene.add(mesh);
         
         const gui = new GUI();
+        // Fix: The controllers object stores Controller instances, not GUI instances.
+        const controllers: { [key: string]: Controller } = {};
         
         const applyPreset = (preset: Preset) => {
             lastAppliedPreset = preset;
-            uniforms.uNoiseType.value = preset.noiseType;
-            displacementParams.type = Object.keys(noiseTypes).find(key => noiseTypes[key as keyof typeof noiseTypes] === preset.noiseType) || 'Simplex';
-            uniforms.uBigWavesElevation.value = preset.uBigWavesElevation;
-            uniforms.uBigWavesFrequency.value.x = preset.uBigWavesFrequency.x;
-            uniforms.uBigWavesFrequency.value.y = preset.uBigWavesFrequency.y;
-            uniforms.uBigWavesSpeed.value = preset.uBigWavesSpeed;
-            uniforms.uSmallWavesElevation.value = preset.uSmallWavesElevation;
-            uniforms.uSmallWavesFrequency.value = preset.uSmallWavesFrequency;
-            uniforms.uSmallWavesSpeed.value = preset.uSmallWavesSpeed;
-            
-            if (perfParams.quality === 'Low') {
-                uniforms.uSmallWavesIterations.value = Math.min(preset.uSmallWavesIterations, 2.0);
-            } else {
-                uniforms.uSmallWavesIterations.value = preset.uSmallWavesIterations;
-            }
 
-            uniforms.uColorOffset.value = preset.uColorOffset;
-            uniforms.uColorMultiplier.value = preset.uColorMultiplier;
-            uniforms.uDepthColor.value.set(preset.depthColor);
-            uniforms.uSurfaceColor.value.set(preset.surfaceColor);
-            gui.controllers.forEach((c) => c.updateDisplay());
+            const noiseTypeName = Object.keys(noiseTypes).find(key => noiseTypes[key as keyof typeof noiseTypes] === preset.noiseType) || 'Simplex';
+            controllers.noiseType.setValue(noiseTypeName);
+
+            controllers.bigWavesElevation.setValue(preset.uBigWavesElevation);
+            controllers.bigWavesFrequencyX.setValue(preset.uBigWavesFrequency.x);
+            controllers.bigWavesFrequencyY.setValue(preset.uBigWavesFrequency.y);
+            controllers.bigWavesSpeed.setValue(preset.uBigWavesSpeed);
+            controllers.smallWavesElevation.setValue(preset.uSmallWavesElevation);
+            controllers.smallWavesFrequency.setValue(preset.uSmallWavesFrequency);
+            controllers.smallWavesSpeed.setValue(preset.uSmallWavesSpeed);
+
+            let iterations = preset.uSmallWavesIterations;
+            if (perfParams.quality === 'Low') {
+                iterations = Math.min(preset.uSmallWavesIterations, 2.0);
+            }
+            controllers.smallWavesIterations.setValue(iterations);
+
+            controllers.colorOffset.setValue(preset.uColorOffset);
+            controllers.colorMultiplier.setValue(preset.uColorMultiplier);
+            controllers.depthColor.setValue(preset.depthColor);
+            controllers.surfaceColor.setValue(preset.surfaceColor);
         };
 
         let presetsFolder: GUI;
@@ -457,35 +455,40 @@ const ShaderCanvas: React.FC = () => {
         gui.add(ioControls, 'exportPresets').name('Export Presets');
         
         rebuildPresetsFolder(presets);
-        applyPreset(presets["Serene Twilight"]);
         
         const displacementFolder = gui.addFolder('Displacement');
-        displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
+        controllers.noiseType = displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
             uniforms.uNoiseType.value = noiseTypes[value as keyof typeof noiseTypes];
         });
 
         const waveFolder = gui.addFolder('Large Waves');
-        waveFolder.add(uniforms.uBigWavesElevation, 'value', 0, 0.5, 0.001).name('elevation');
-        waveFolder.add(uniforms.uBigWavesFrequency.value, 'x', 0, 5, 0.01).name('frequencyX');
-        waveFolder.add(uniforms.uBigWavesFrequency.value, 'y', 0, 5, 0.01).name('frequencyY');
-        waveFolder.add(uniforms.uBigWavesSpeed, 'value', 0, 1, 0.005).name('speed');
+        controllers.bigWavesElevation = waveFolder.add(uniforms.uBigWavesElevation, 'value', 0, 0.5, 0.001).name('elevation');
+        controllers.bigWavesFrequencyX = waveFolder.add(uniforms.uBigWavesFrequency.value, 'x', 0, 5, 0.01).name('frequencyX');
+        controllers.bigWavesFrequencyY = waveFolder.add(uniforms.uBigWavesFrequency.value, 'y', 0, 5, 0.01).name('frequencyY');
+        controllers.bigWavesSpeed = waveFolder.add(uniforms.uBigWavesSpeed, 'value', 0, 1, 0.005).name('speed');
         
         const smallWaveFolder = gui.addFolder('Fine Ripples');
-        smallWaveFolder.add(uniforms.uSmallWavesElevation, 'value', 0, 0.3, 0.001).name('elevation');
-        smallWaveFolder.add(uniforms.uSmallWavesFrequency, 'value', 0, 20, 0.01).name('frequency');
-        smallWaveFolder.add(uniforms.uSmallWavesSpeed, 'value', 0, 1, 0.005).name('speed');
-        smallWaveFolder.add(uniforms.uSmallWavesIterations, 'value', 1, 8, 1).name('iterations');
+        controllers.smallWavesElevation = smallWaveFolder.add(uniforms.uSmallWavesElevation, 'value', 0, 0.3, 0.001).name('elevation');
+        controllers.smallWavesFrequency = smallWaveFolder.add(uniforms.uSmallWavesFrequency, 'value', 0, 20, 0.01).name('frequency');
+        controllers.smallWavesSpeed = smallWaveFolder.add(uniforms.uSmallWavesSpeed, 'value', 0, 1, 0.005).name('speed');
+        controllers.smallWavesIterations = smallWaveFolder.add(uniforms.uSmallWavesIterations, 'value', 1, 8, 1).name('iterations');
 
         const colorFolder = gui.addFolder('Colors');
-        colorFolder.addColor(uniforms.uDepthColor, 'value').name('depth');
-        colorFolder.addColor(uniforms.uSurfaceColor, 'value').name('surface');
-        colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
-        colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
+        controllers.depthColor = colorFolder.addColor(colorParams, 'depthColor').name('depth').onChange((value: string) => {
+            uniforms.uDepthColor.value.set(value);
+        });
+        controllers.surfaceColor = colorFolder.addColor(colorParams, 'surfaceColor').name('surface').onChange((value: string) => {
+            uniforms.uSurfaceColor.value.set(value);
+        });
+        controllers.colorOffset = colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
+        controllers.colorMultiplier = colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
 
         displacementFolder.close();
         waveFolder.close();
         smallWaveFolder.close();
         colorFolder.close();
+
+        applyPreset(presets["Serene Twilight"]);
 
         const mousePosition = new THREE.Vector2(9999, 9999);
         const handleMouseMove = (event: MouseEvent) => {
@@ -498,7 +501,6 @@ const ShaderCanvas: React.FC = () => {
             camera.aspect = sizes.width / sizes.height;
             camera.updateProjectionMatrix();
             renderer.setSize(sizes.width, sizes.height);
-            // On resize, we respect the current quality setting for pixel ratio
             renderer.setPixelRatio(qualitySettings[perfParams.quality].pixelRatio);
             uniforms.uCameraAspect.value = camera.aspect;
         };
