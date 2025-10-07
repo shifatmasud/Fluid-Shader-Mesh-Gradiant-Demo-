@@ -342,14 +342,27 @@ const compositeFragmentShader = `
   uniform sampler2D uSceneTexture;
   uniform sampler2D uBlurTexture;
   uniform float uIntensity;
+  uniform float uNoiseAlpha;
+  uniform float uTime;
   varying vec2 vUv;
+
+  // A simple pseudo-random noise function
+  float rand(vec2 n) { 
+    return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453);
+  }
 
   void main() {
     vec4 sceneColor = texture2D(uSceneTexture, vUv);
     vec4 blurColor = texture2D(uBlurTexture, vUv);
 
     // Additive blending for a bloom/glow effect
-    gl_FragColor = sceneColor + blurColor * uIntensity;
+    vec4 finalColor = sceneColor + blurColor * uIntensity;
+    
+    // Add animated film grain
+    float noise = rand(vUv + fract(uTime));
+    finalColor.rgb += (noise - 0.5) * uNoiseAlpha;
+
+    gl_FragColor = finalColor;
   }
 `;
 
@@ -540,7 +553,9 @@ const ShaderCanvas: React.FC = () => {
             uniforms: {
                 uSceneTexture: { value: null },
                 uBlurTexture: { value: null },
-                uIntensity: { value: 1.0 }
+                uIntensity: { value: 1.0 },
+                uNoiseAlpha: { value: 0.05 },
+                uTime: { value: 0 }
             }
         });
         const postMesh = new THREE.Mesh(postGeometry, compositeMaterial);
@@ -646,6 +661,9 @@ const ShaderCanvas: React.FC = () => {
 
         const blurFolder = gui.addFolder('Ethereal Blur');
         controllers.blurIntensity = blurFolder.add(compositeMaterial.uniforms.uIntensity, 'value', 0, 2, 0.01).name('intensity');
+
+        const filmGrainFolder = gui.addFolder('Film Grain');
+        filmGrainFolder.add(compositeMaterial.uniforms.uNoiseAlpha, 'value', 0, 0.2, 0.001).name('intensity');
         
         const fluidFolder = gui.addFolder('Cursor Ripples');
         fluidFolder.add(uniforms.uRippleStrength, 'value', 0, 0.5, 0.005).name('strength');
@@ -681,6 +699,7 @@ const ShaderCanvas: React.FC = () => {
         controllers.colorMultiplier = colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
 
         blurFolder.close();
+        filmGrainFolder.close();
         fluidFolder.close();
         displacementFolder.close();
         waveFolder.close();
@@ -719,6 +738,7 @@ const ShaderCanvas: React.FC = () => {
         const tick = () => {
             const elapsedTime = clock.getElapsedTime();
             uniforms.uTime.value = elapsedTime;
+            compositeMaterial.uniforms.uTime.value = elapsedTime;
             
             // Update fluid sim mouse
             rippleUniforms.uMouse.value.copy(fluidMousePosition);
