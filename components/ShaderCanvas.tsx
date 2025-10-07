@@ -309,6 +309,50 @@ const rippleFragmentShader = `
   }
 `;
 
+// Post-processing shaders
+const postVertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position, 1.0);
+  }
+`;
+
+const blurFragmentShader = `
+  uniform sampler2D uTexture;
+  uniform vec2 uDirection; // (1.0/width, 0.0) for H, (0.0, 1.0/height) for V
+  varying vec2 vUv;
+
+  void main() {
+    vec4 color = vec4(0.0);
+    // 5-tap Gaussian blur kernel
+    float weights[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    
+    color += texture2D(uTexture, vUv) * weights[0];
+    for(int i = 1; i < 5; i++) {
+        color += texture2D(uTexture, vUv + float(i) * uDirection) * weights[i];
+        color += texture2D(uTexture, vUv - float(i) * uDirection) * weights[i];
+    }
+
+    gl_FragColor = color;
+  }
+`;
+
+const compositeFragmentShader = `
+  uniform sampler2D uSceneTexture;
+  uniform sampler2D uBlurTexture;
+  uniform float uIntensity;
+  varying vec2 vUv;
+
+  void main() {
+    vec4 sceneColor = texture2D(uSceneTexture, vUv);
+    vec4 blurColor = texture2D(uBlurTexture, vUv);
+
+    // Additive blending for a bloom/glow effect
+    gl_FragColor = sceneColor + blurColor * uIntensity;
+  }
+`;
+
 
 const defaultPresets = {
   "Serene Twilight": {
@@ -316,42 +360,49 @@ const defaultPresets = {
     uBigWavesElevation: 0.05, uBigWavesFrequency: { x: 0.6, y: 0.4 }, uBigWavesSpeed: 0.03,
     uSmallWavesElevation: 0.04, uSmallWavesFrequency: 2.5, uSmallWavesSpeed: 0.1, uSmallWavesIterations: 4.0,
     depthColor: '#0c3483', surfaceColor: '#a2b6df', uColorOffset: 0.2, uColorMultiplier: 3.0,
+    blurIntensity: 0.8,
   },
   "Cherry Blossom": {
     noiseType: 1, // Simplex
     uBigWavesElevation: 0.04, uBigWavesFrequency: { x: 0.5, y: 0.4 }, uBigWavesSpeed: 0.03,
     uSmallWavesElevation: 0.06, uSmallWavesFrequency: 2.5, uSmallWavesSpeed: 0.12, uSmallWavesIterations: 4.0,
     depthColor: '#ff758c', surfaceColor: '#ffdde1', uColorOffset: 0.2, uColorMultiplier: 3.5,
+    blurIntensity: 0.4,
   },
   "Warm Embrace": {
     noiseType: 1, // Simplex
     uBigWavesElevation: 0.03, uBigWavesFrequency: { x: 1.0, y: 0.8 }, uBigWavesSpeed: 0.06,
     uSmallWavesElevation: 0.05, uSmallWavesFrequency: 5.0, uSmallWavesSpeed: 0.2, uSmallWavesIterations: 4.0,
     depthColor: '#E85A4F', surfaceColor: '#FFF4E0', uColorOffset: 0.25, uColorMultiplier: 2.0,
+    blurIntensity: 0.9,
   },
   "Golden Hour": {
     noiseType: 0, // Perlin
     uBigWavesElevation: 0.02, uBigWavesFrequency: { x: 0.5, y: 0.5 }, uBigWavesSpeed: 0.025,
     uSmallWavesElevation: 0.04, uSmallWavesFrequency: 4.0, uSmallWavesSpeed: 0.15, uSmallWavesIterations: 3.0,
     depthColor: '#F09819', surfaceColor: '#FFFDE4', uColorOffset: 0.2, uColorMultiplier: 2.0,
+    blurIntensity: 0.7,
   },
   "Misty Meadow": {
     noiseType: 2, // Worley
     uBigWavesElevation: 0.08, uBigWavesFrequency: { x: 0.3, y: 0.3 }, uBigWavesSpeed: 0.02,
     uSmallWavesElevation: 0.04, uSmallWavesFrequency: 2.0, uSmallWavesSpeed: 0.05, uSmallWavesIterations: 3.0,
     depthColor: '#01416d', surfaceColor: '#48b1bf', uColorOffset: 0.15, uColorMultiplier: 3.0,
+    blurIntensity: 1.2,
   },
   "Cloud Scape": {
     noiseType: 3, // FBM
     uBigWavesElevation: 0.15, uBigWavesFrequency: { x: 0.5, y: 0.4 }, uBigWavesSpeed: 0.03,
     uSmallWavesElevation: 0.0, uSmallWavesFrequency: 1.0, uSmallWavesSpeed: 0.0, uSmallWavesIterations: 1.0,
     depthColor: '#4a6e8a', surfaceColor: '#d3e0ea', uColorOffset: 0.2, uColorMultiplier: 3.0,
+    blurIntensity: 1.5,
   },
   "Emerald Tide": {
     noiseType: 1, // Simplex
     uBigWavesElevation: 0.06, uBigWavesFrequency: { x: 0.4, y: 0.3 }, uBigWavesSpeed: 0.04,
     uSmallWavesElevation: 0.05, uSmallWavesFrequency: 3.0, uSmallWavesSpeed: 0.18, uSmallWavesIterations: 4.0,
     depthColor: '#00796B', surfaceColor: '#69F0AE', uColorOffset: 0.25, uColorMultiplier: 3.5,
+    blurIntensity: 0.5,
   },
 };
 type Preset = typeof defaultPresets[keyof typeof defaultPresets];
@@ -363,12 +414,14 @@ const qualitySettings = {
         geometrySegments: 256,
         antialias: true,
         fboResolution: 512,
+        blurDownsample: 4,
     },
     Low: {
         pixelRatio: 1,
         geometrySegments: 128,
         antialias: false,
         fboResolution: 256,
+        blurDownsample: 8,
     },
 };
 type Quality = keyof typeof qualitySettings;
@@ -455,17 +508,51 @@ const ShaderCanvas: React.FC = () => {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.rotation.x = -Math.PI * 0.35;
         scene.add(mesh);
+
+        // Post-processing setup
+        const postScene = new THREE.Scene();
+        const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const postGeometry = new THREE.PlaneGeometry(2, 2);
+
+        let sceneFBO = new THREE.WebGLRenderTarget(sizes.width, sizes.height, { type: THREE.FloatType });
+        let blurFBO1 = new THREE.WebGLRenderTarget(sizes.width / settings.blurDownsample, sizes.height / settings.blurDownsample, { type: THREE.FloatType });
+        let blurFBO2 = new THREE.WebGLRenderTarget(sizes.width / settings.blurDownsample, sizes.height / settings.blurDownsample, { type: THREE.FloatType });
+
+        const blurHorizontalMaterial = new THREE.ShaderMaterial({
+            vertexShader: postVertexShader,
+            fragmentShader: blurFragmentShader,
+            uniforms: {
+                uTexture: { value: null },
+                uDirection: { value: new THREE.Vector2(1 / (sizes.width / settings.blurDownsample), 0) }
+            }
+        });
+        const blurVerticalMaterial = new THREE.ShaderMaterial({
+            vertexShader: postVertexShader,
+            fragmentShader: blurFragmentShader,
+            uniforms: {
+                uTexture: { value: null },
+                uDirection: { value: new THREE.Vector2(0, 1 / (sizes.height / settings.blurDownsample)) }
+            }
+        });
+        const compositeMaterial = new THREE.ShaderMaterial({
+            vertexShader: postVertexShader,
+            fragmentShader: compositeFragmentShader,
+            uniforms: {
+                uSceneTexture: { value: null },
+                uBlurTexture: { value: null },
+                uIntensity: { value: 1.0 }
+            }
+        });
+        const postMesh = new THREE.Mesh(postGeometry, compositeMaterial);
+        postScene.add(postMesh);
         
         const gui = new GUI();
-        // Fix: The controllers object stores Controller instances, not GUI instances.
         const controllers: { [key: string]: Controller } = {};
         
         const applyPreset = (preset: Preset) => {
             lastAppliedPreset = preset;
-
             const noiseTypeName = Object.keys(noiseTypes).find(key => noiseTypes[key as keyof typeof noiseTypes] === preset.noiseType) || 'Simplex';
             controllers.noiseType.setValue(noiseTypeName);
-
             controllers.bigWavesElevation.setValue(preset.uBigWavesElevation);
             controllers.bigWavesFrequencyX.setValue(preset.uBigWavesFrequency.x);
             controllers.bigWavesFrequencyY.setValue(preset.uBigWavesFrequency.y);
@@ -473,17 +560,16 @@ const ShaderCanvas: React.FC = () => {
             controllers.smallWavesElevation.setValue(preset.uSmallWavesElevation);
             controllers.smallWavesFrequency.setValue(preset.uSmallWavesFrequency);
             controllers.smallWavesSpeed.setValue(preset.uSmallWavesSpeed);
-
             let iterations = preset.uSmallWavesIterations;
             if (perfParams.quality === 'Low') {
                 iterations = Math.min(preset.uSmallWavesIterations, 2.0);
             }
             controllers.smallWavesIterations.setValue(iterations);
-
             controllers.colorOffset.setValue(preset.uColorOffset);
             controllers.colorMultiplier.setValue(preset.uColorMultiplier);
             controllers.depthColor.setValue(preset.depthColor);
             controllers.surfaceColor.setValue(preset.surfaceColor);
+            controllers.blurIntensity.setValue(preset.blurIntensity);
         };
 
         let presetsFolder: GUI;
@@ -546,7 +632,10 @@ const ShaderCanvas: React.FC = () => {
             fbo1.setSize(settings.fboResolution, settings.fboResolution);
             fbo2.setSize(settings.fboResolution, settings.fboResolution);
             rippleUniforms.uTexelSize.value.set(1 / settings.fboResolution, 1 / settings.fboResolution);
-            applyPreset(lastAppliedPreset); // Re-apply to update iterations
+            // Re-apply preset to update iterations based on new quality
+            applyPreset(lastAppliedPreset);
+            // Manually trigger resize to update blur buffers
+            handleResize();
         });
         perfFolder.open();
 
@@ -554,6 +643,9 @@ const ShaderCanvas: React.FC = () => {
         gui.add(ioControls, 'exportPresets').name('Export Presets');
         
         rebuildPresetsFolder(presetsRef.current);
+
+        const blurFolder = gui.addFolder('Ethereal Blur');
+        controllers.blurIntensity = blurFolder.add(compositeMaterial.uniforms.uIntensity, 'value', 0, 2, 0.01).name('intensity');
         
         const fluidFolder = gui.addFolder('Cursor Ripples');
         fluidFolder.add(uniforms.uRippleStrength, 'value', 0, 0.5, 0.005).name('strength');
@@ -588,6 +680,7 @@ const ShaderCanvas: React.FC = () => {
         controllers.colorOffset = colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
         controllers.colorMultiplier = colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
 
+        blurFolder.close();
         fluidFolder.close();
         displacementFolder.close();
         waveFolder.close();
@@ -609,6 +702,14 @@ const ShaderCanvas: React.FC = () => {
             renderer.setSize(sizes.width, sizes.height);
             renderer.setPixelRatio(qualitySettings[perfParams.quality].pixelRatio);
             uniforms.uCameraAspect.value = camera.aspect;
+
+            // Update post-processing FBOs
+            const blurDownsample = settings.blurDownsample;
+            sceneFBO.setSize(sizes.width, sizes.height);
+            blurFBO1.setSize(sizes.width / blurDownsample, sizes.height / blurDownsample);
+            blurFBO2.setSize(sizes.width / blurDownsample, sizes.height / blurDownsample);
+            blurHorizontalMaterial.uniforms.uDirection.value.set(1 / (sizes.width / blurDownsample), 0);
+            blurVerticalMaterial.uniforms.uDirection.value.set(0, 1 / (sizes.height / blurDownsample));
         };
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('resize', handleResize);
@@ -627,15 +728,34 @@ const ShaderCanvas: React.FC = () => {
             rippleUniforms.uPrevTexture.value = fbo1.texture;
             renderer.render(fluidScene, fluidCamera);
             
-            // Swap FBOs
             const temp = fbo1;
             fbo1 = fbo2;
             fbo2 = temp;
-            
-            // Render main scene
-            renderer.setRenderTarget(null);
+
+            // --- Post-processing ---
+            // 1. Render main scene to texture
+            renderer.setRenderTarget(sceneFBO);
             uniforms.uDisplacementMap.value = fbo1.texture;
             renderer.render(scene, camera);
+
+            // 2. Horizontal Blur Pass
+            postMesh.material = blurHorizontalMaterial;
+            blurHorizontalMaterial.uniforms.uTexture.value = sceneFBO.texture;
+            renderer.setRenderTarget(blurFBO1);
+            renderer.render(postScene, postCamera);
+
+            // 3. Vertical Blur Pass
+            postMesh.material = blurVerticalMaterial;
+            blurVerticalMaterial.uniforms.uTexture.value = blurFBO1.texture;
+            renderer.setRenderTarget(blurFBO2);
+            renderer.render(postScene, postCamera);
+
+            // 4. Composite to screen
+            postMesh.material = compositeMaterial;
+            compositeMaterial.uniforms.uSceneTexture.value = sceneFBO.texture;
+            compositeMaterial.uniforms.uBlurTexture.value = blurFBO2.texture;
+            renderer.setRenderTarget(null);
+            renderer.render(postScene, postCamera);
             
             animationFrameId = window.requestAnimationFrame(tick);
         };
@@ -652,6 +772,14 @@ const ShaderCanvas: React.FC = () => {
             rippleMaterial.dispose();
             fbo1.dispose();
             fbo2.dispose();
+            // Dispose post-processing resources
+            sceneFBO.dispose();
+            blurFBO1.dispose();
+            blurFBO2.dispose();
+            postGeometry.dispose();
+            blurHorizontalMaterial.dispose();
+            blurVerticalMaterial.dispose();
+            compositeMaterial.dispose();
             gui.destroy();
             if (currentMount && renderer.domElement) {
                 currentMount.removeChild(renderer.domElement);
