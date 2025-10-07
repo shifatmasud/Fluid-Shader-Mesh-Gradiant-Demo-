@@ -18,4 +18,7 @@ export interface ShaderUniforms {
   uColorMultiplier: { value: number };
   uDepthColor: { value: THREE.Color };
   uSurfaceColor: { value: THREE.Color };
+  // New uniforms for ripple effect
+  uDisplacementMap: { value: THREE.Texture | null };
+  uRippleStrength: { value: number };
 }

@@ -21,6 +21,10 @@ const vertexShader = `
   uniform float uSmallWavesSpeed;
   uniform float uSmallWavesIterations;
 
+  // New uniforms for fluid displacement
+  uniform sampler2D uDisplacementMap;
+  uniform float uRippleStrength;
+
   // Classic Perlin 3D Noise (from original)
   vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
   vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
@@ -216,10 +220,9 @@ const vertexShader = `
     
     vWaveElevation = waveElevation;
     
-    // Mouse interaction
-    float mouseDistance = distance(vec2(uMouse.x * (2.0 / uCameraAspect), uMouse.y * 2.0), modelPosition.xy);
-    float mouseEffect = 1.0 - smoothstep(0.0, 0.4, mouseDistance);
-    float totalElevation = waveElevation + mouseEffect * 0.15;
+    // Fluid displacement from cursor
+    float fluidDisplacement = texture2D(uDisplacementMap, uv).r;
+    float totalElevation = waveElevation + fluidDisplacement * uRippleStrength;
 
     modelPosition.z = totalElevation;
 
@@ -247,6 +250,55 @@ const fragmentShader = `
     gl_FragColor = vec4(color, 1.0);
   }
 `;
+
+const rippleVertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const rippleFragmentShader = `
+  uniform sampler2D uPrevTexture;
+  uniform vec2 uMouse;
+  uniform vec2 uPrevMouse;
+  uniform float uBrushSize;
+  uniform float uDamping;
+  uniform vec2 uTexelSize;
+
+  varying vec2 vUv;
+
+  void main() {
+    vec2 north = vec2(vUv.x, vUv.y + uTexelSize.y);
+    vec2 south = vec2(vUv.x, vUv.y - uTexelSize.y);
+    vec2 east = vec2(vUv.x + uTexelSize.x, vUv.y);
+    vec2 west = vec2(vUv.x - uTexelSize.x, vUv.y);
+
+    float n = texture2D(uPrevTexture, north).r;
+    float s = texture2D(uPrevTexture, south).r;
+    float e = texture2D(uPrevTexture, east).r;
+    float w = texture2D(uPrevTexture, west).r;
+
+    float average = (n + s + e + w) * 0.5;
+    float prevHeight = texture2D(uPrevTexture, vUv).g;
+
+    float newHeight = average - prevHeight;
+    newHeight *= uDamping;
+    
+    vec2 mouseDelta = uMouse - uPrevMouse;
+    float speed = clamp(length(mouseDelta) * 5.0, 0.0, 1.0);
+    float drop = max(0.0, 1.0 - distance(uMouse, vUv) / uBrushSize);
+    drop = pow(drop, 3.0);
+    drop *= speed;
+
+    newHeight += drop * 0.1;
+
+    // Store new height in red, current height in green for next frame
+    gl_FragColor = vec4(newHeight, texture2D(uPrevTexture, vUv).r, 0.0, 1.0);
+  }
+`;
+
 
 const defaultPresets = {
   "Serene Twilight": {
@@ -300,11 +352,13 @@ const qualitySettings = {
         pixelRatio: Math.min(window.devicePixelRatio, 2),
         geometrySegments: 256,
         antialias: true,
+        fboResolution: 512,
     },
     Low: {
         pixelRatio: 1,
         geometrySegments: 128,
         antialias: false,
+        fboResolution: 256,
     },
 };
 type Quality = keyof typeof qualitySettings;
@@ -318,7 +372,7 @@ const ShaderCanvas: React.FC = () => {
 
         const isMobile = window.innerWidth < 768;
         const perfParams = { quality: (isMobile ? 'Low' : 'High') as Quality };
-        const settings = qualitySettings[perfParams.quality];
+        let settings = qualitySettings[perfParams.quality];
         
         let lastAppliedPreset: Preset = presetsRef.current["Serene Twilight"];
 
@@ -337,7 +391,32 @@ const ShaderCanvas: React.FC = () => {
         renderer.setSize(sizes.width, sizes.height);
         renderer.setPixelRatio(settings.pixelRatio);
         currentMount.appendChild(renderer.domElement);
+
+        // Fluid Simulation Setup
+        const fluidScene = new THREE.Scene();
+        const fluidCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const fluidGeometry = new THREE.PlaneGeometry(2, 2);
+        let fbo1 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
+        let fbo2 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
         
+        const fluidParams = { strength: 0.15, damping: 0.985, brushSize: 0.08 };
+
+        const rippleUniforms = {
+            uPrevTexture: { value: null },
+            uMouse: { value: new THREE.Vector2(0.5, 0.5) },
+            uPrevMouse: { value: new THREE.Vector2(0.5, 0.5) },
+            uBrushSize: { value: fluidParams.brushSize },
+            uDamping: { value: fluidParams.damping },
+            uTexelSize: { value: new THREE.Vector2(1 / settings.fboResolution, 1 / settings.fboResolution) }
+        };
+        const rippleMaterial = new THREE.ShaderMaterial({
+            vertexShader: rippleVertexShader,
+            fragmentShader: rippleFragmentShader,
+            uniforms: rippleUniforms
+        });
+        const fluidMesh = new THREE.Mesh(fluidGeometry, rippleMaterial);
+        fluidScene.add(fluidMesh);
+
         const displacementParams = { type: 'Simplex' };
         const noiseTypes = { Perlin: 0, Simplex: 1, Worley: 2, FBM: 3, Smooth: 4 };
         
@@ -356,7 +435,9 @@ const ShaderCanvas: React.FC = () => {
             uDepthColor: { value: new THREE.Color(colorParams.depthColor) },
             uSurfaceColor: { value: new THREE.Color(colorParams.surfaceColor) },
             uColorOffset: { value: 0.3 },
-            uColorMultiplier: { value: 2.5 }
+            uColorMultiplier: { value: 2.5 },
+            uDisplacementMap: { value: null },
+            uRippleStrength: { value: fluidParams.strength }
         };
 
         const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
@@ -450,8 +531,11 @@ const ShaderCanvas: React.FC = () => {
 
         const perfFolder = gui.addFolder('Performance');
         perfFolder.add(perfParams, 'quality', ['High', 'Low']).name('Quality').onChange((value: Quality) => {
-            const newSettings = qualitySettings[value];
-            renderer.setPixelRatio(newSettings.pixelRatio);
+            settings = qualitySettings[value];
+            renderer.setPixelRatio(settings.pixelRatio);
+            fbo1.setSize(settings.fboResolution, settings.fboResolution);
+            fbo2.setSize(settings.fboResolution, settings.fboResolution);
+            rippleUniforms.uTexelSize.value.set(1 / settings.fboResolution, 1 / settings.fboResolution);
             applyPreset(lastAppliedPreset); // Re-apply to update iterations
         });
         perfFolder.open();
@@ -461,6 +545,11 @@ const ShaderCanvas: React.FC = () => {
         
         rebuildPresetsFolder(presetsRef.current);
         
+        const fluidFolder = gui.addFolder('Cursor Ripples');
+        fluidFolder.add(uniforms.uRippleStrength, 'value', 0, 0.5, 0.005).name('strength');
+        fluidFolder.add(rippleUniforms.uDamping, 'value', 0.8, 0.999, 0.001).name('damping');
+        fluidFolder.add(rippleUniforms.uBrushSize, 'value', 0.01, 0.2, 0.001).name('brush size');
+
         const displacementFolder = gui.addFolder('Displacement');
         controllers.noiseType = displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
             uniforms.uNoiseType.value = noiseTypes[value as keyof typeof noiseTypes];
@@ -488,6 +577,7 @@ const ShaderCanvas: React.FC = () => {
         controllers.colorOffset = colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
         controllers.colorMultiplier = colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
 
+        fluidFolder.close();
         displacementFolder.close();
         waveFolder.close();
         smallWaveFolder.close();
@@ -495,10 +585,10 @@ const ShaderCanvas: React.FC = () => {
 
         applyPreset(presetsRef.current["Serene Twilight"]);
 
-        const mousePosition = new THREE.Vector2(9999, 9999);
+        const fluidMousePosition = new THREE.Vector2(0.5, 0.5);
         const handleMouseMove = (event: MouseEvent) => {
-            mousePosition.x = (event.clientX / sizes.width) * 2 - 1;
-            mousePosition.y = -(event.clientY / sizes.height) * 2 + 1;
+            fluidMousePosition.x = event.clientX / sizes.width;
+            fluidMousePosition.y = 1.0 - (event.clientY / sizes.height);
         };
         const handleResize = () => {
             sizes.width = currentMount.clientWidth;
@@ -517,9 +607,26 @@ const ShaderCanvas: React.FC = () => {
         const tick = () => {
             const elapsedTime = clock.getElapsedTime();
             uniforms.uTime.value = elapsedTime;
-            uniforms.uMouse.value.x += (mousePosition.x - uniforms.uMouse.value.x) * 0.05;
-            uniforms.uMouse.value.y += (mousePosition.y - uniforms.uMouse.value.y) * 0.05;
+            
+            // Update fluid sim mouse
+            rippleUniforms.uPrevMouse.value.copy(rippleUniforms.uMouse.value);
+            rippleUniforms.uMouse.value.copy(fluidMousePosition);
+
+            // Ping-pong rendering for fluid simulation
+            renderer.setRenderTarget(fbo2);
+            rippleUniforms.uPrevTexture.value = fbo1.texture;
+            renderer.render(fluidScene, fluidCamera);
+            
+            // Swap FBOs
+            const temp = fbo1;
+            fbo1 = fbo2;
+            fbo2 = temp;
+            
+            // Render main scene
+            renderer.setRenderTarget(null);
+            uniforms.uDisplacementMap.value = fbo1.texture;
             renderer.render(scene, camera);
+            
             animationFrameId = window.requestAnimationFrame(tick);
         };
         tick();
@@ -531,6 +638,10 @@ const ShaderCanvas: React.FC = () => {
             renderer.dispose();
             geometry.dispose();
             material.dispose();
+            fluidGeometry.dispose();
+            rippleMaterial.dispose();
+            fbo1.dispose();
+            fbo2.dispose();
             gui.destroy();
             if (currentMount && renderer.domElement) {
                 currentMount.removeChild(renderer.domElement);
