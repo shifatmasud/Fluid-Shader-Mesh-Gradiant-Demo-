@@ -60,7 +60,7 @@ const vertexShader = `
     vec3 g110 = vec3(gx0.w,gy0.w,gz0.w);
     vec3 g001 = vec3(gx1.x,gy1.x,gz1.x);
     vec3 g101 = vec3(gx1.y,gy1.y,gz1.y);
-    vec3 g011 = vec3(gx1.z,gy1.z,gz1.z);
+    vec3 g011 = vec3(gx1.z,gy1.z,gz1.x);
     vec3 g111 = vec3(gx1.w,gy1.w,gz1.w);
     vec4 norm0 = taylorInvSqrt(vec4(dot(g000, g000), dot(g010, g010), dot(g100, g100), dot(g110, g110)));
     g000 *= norm0.x;
@@ -239,13 +239,16 @@ const fragmentShader = `
 
   void main() {
     float mixStrength = (vWaveElevation + uColorOffset) * uColorMultiplier;
-    vec3 color = mix(uDepthColor, uSurfaceColor, mixStrength);
+    
+    // Use smoothstep for a more gradual, "buttery" color transition
+    float smoothedMix = smoothstep(0.0, 1.0, mixStrength);
+    vec3 color = mix(uDepthColor, uSurfaceColor, smoothedMix);
     
     gl_FragColor = vec4(color, 1.0);
   }
 `;
 
-let presets = {
+const defaultPresets = {
   "Serene Twilight": {
     noiseType: 1, // Simplex
     uBigWavesElevation: 0.05, uBigWavesFrequency: { x: 0.6, y: 0.4 }, uBigWavesSpeed: 0.03,
@@ -289,8 +292,8 @@ let presets = {
     depthColor: '#00796B', surfaceColor: '#69F0AE', uColorOffset: 0.25, uColorMultiplier: 3.5,
   },
 };
-type Preset = typeof presets[keyof typeof presets];
-type Presets = typeof presets;
+type Preset = typeof defaultPresets[keyof typeof defaultPresets];
+type Presets = typeof defaultPresets;
 
 const qualitySettings = {
     High: {
@@ -308,6 +311,7 @@ type Quality = keyof typeof qualitySettings;
 
 const ShaderCanvas: React.FC = () => {
     const mountRef = useRef<HTMLDivElement>(null);
+    const presetsRef = useRef<Presets>(JSON.parse(JSON.stringify(defaultPresets)));
     
     useEffect(() => {
         if (!mountRef.current) return;
@@ -315,7 +319,8 @@ const ShaderCanvas: React.FC = () => {
         const isMobile = window.innerWidth < 768;
         const perfParams = { quality: (isMobile ? 'Low' : 'High') as Quality };
         const settings = qualitySettings[perfParams.quality];
-        let lastAppliedPreset: Preset = presets["Serene Twilight"];
+        
+        let lastAppliedPreset: Preset = presetsRef.current["Serene Twilight"];
 
         const currentMount = mountRef.current;
         const scene = new THREE.Scene();
@@ -405,7 +410,7 @@ const ShaderCanvas: React.FC = () => {
         
         const ioControls = {
             exportPresets: () => {
-                const json = JSON.stringify(presets, null, 2);
+                const json = JSON.stringify(presetsRef.current, null, 2);
                 const blob = new Blob([json], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -426,9 +431,9 @@ const ShaderCanvas: React.FC = () => {
                         try {
                             const newPresets = JSON.parse(e.target?.result as string);
                             if (typeof newPresets === 'object' && newPresets !== null) {
-                                presets = newPresets;
-                                rebuildPresetsFolder(presets);
-                                const firstPreset = Object.values(presets)[0] as Preset;
+                                presetsRef.current = newPresets;
+                                rebuildPresetsFolder(presetsRef.current);
+                                const firstPreset = Object.values(presetsRef.current)[0] as Preset;
                                 if (firstPreset) applyPreset(firstPreset);
                             } else {
                                 alert('Invalid presets file format.');
@@ -454,7 +459,7 @@ const ShaderCanvas: React.FC = () => {
         gui.add(ioControls, 'importPresets').name('Import Presets');
         gui.add(ioControls, 'exportPresets').name('Export Presets');
         
-        rebuildPresetsFolder(presets);
+        rebuildPresetsFolder(presetsRef.current);
         
         const displacementFolder = gui.addFolder('Displacement');
         controllers.noiseType = displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
@@ -488,7 +493,7 @@ const ShaderCanvas: React.FC = () => {
         smallWaveFolder.close();
         colorFolder.close();
 
-        applyPreset(presets["Serene Twilight"]);
+        applyPreset(presetsRef.current["Serene Twilight"]);
 
         const mousePosition = new THREE.Vector2(9999, 9999);
         const handleMouseMove = (event: MouseEvent) => {
