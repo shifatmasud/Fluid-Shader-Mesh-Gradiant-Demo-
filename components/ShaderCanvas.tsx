@@ -262,14 +262,21 @@ const rippleVertexShader = `
 const rippleFragmentShader = `
   uniform sampler2D uPrevTexture;
   uniform vec2 uMouse;
-  uniform vec2 uPrevMouse;
   uniform float uBrushSize;
   uniform float uDamping;
+  uniform float uTrailPersistence;
   uniform vec2 uTexelSize;
 
   varying vec2 vUv;
 
   void main() {
+    // Read previous state (height, prevHeight, trail)
+    vec4 prevState = texture2D(uPrevTexture, vUv);
+    float currentHeight = prevState.r;
+    float prevHeight = prevState.g;
+    float trail = prevState.b;
+
+    // Propagate waves from neighbors
     vec2 north = vec2(vUv.x, vUv.y + uTexelSize.y);
     vec2 south = vec2(vUv.x, vUv.y - uTexelSize.y);
     vec2 east = vec2(vUv.x + uTexelSize.x, vUv.y);
@@ -281,21 +288,24 @@ const rippleFragmentShader = `
     float w = texture2D(uPrevTexture, west).r;
 
     float average = (n + s + e + w) * 0.5;
-    float prevHeight = texture2D(uPrevTexture, vUv).g;
-
     float newHeight = average - prevHeight;
-    newHeight *= uDamping;
     
-    vec2 mouseDelta = uMouse - uPrevMouse;
-    float speed = clamp(length(mouseDelta) * 5.0, 0.0, 1.0);
+    // Add a new drop from the mouse to the trail
     float drop = max(0.0, 1.0 - distance(uMouse, vUv) / uBrushSize);
     drop = pow(drop, 3.0);
-    drop *= speed;
+    
+    // Update trail: add new drop and decay existing trail
+    trail = max(trail, drop);
+    trail *= uTrailPersistence;
 
-    newHeight += drop * 0.1;
+    // Apply trail as a force to the wave height
+    newHeight += trail * 0.05;
 
-    // Store new height in red, current height in green for next frame
-    gl_FragColor = vec4(newHeight, texture2D(uPrevTexture, vUv).r, 0.0, 1.0);
+    // Apply damping to the whole simulation
+    newHeight *= uDamping;
+
+    // Store new height in red, current height in green, trail in blue
+    gl_FragColor = vec4(newHeight, currentHeight, trail, 1.0);
   }
 `;
 
@@ -399,14 +409,14 @@ const ShaderCanvas: React.FC = () => {
         let fbo1 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
         let fbo2 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
         
-        const fluidParams = { strength: 0.15, damping: 0.985, brushSize: 0.08 };
+        const fluidParams = { strength: 0.15, damping: 0.985, brushSize: 0.08, trail: 0.95 };
 
         const rippleUniforms = {
             uPrevTexture: { value: null },
             uMouse: { value: new THREE.Vector2(0.5, 0.5) },
-            uPrevMouse: { value: new THREE.Vector2(0.5, 0.5) },
             uBrushSize: { value: fluidParams.brushSize },
             uDamping: { value: fluidParams.damping },
+            uTrailPersistence: { value: fluidParams.trail },
             uTexelSize: { value: new THREE.Vector2(1 / settings.fboResolution, 1 / settings.fboResolution) }
         };
         const rippleMaterial = new THREE.ShaderMaterial({
@@ -549,6 +559,7 @@ const ShaderCanvas: React.FC = () => {
         fluidFolder.add(uniforms.uRippleStrength, 'value', 0, 0.5, 0.005).name('strength');
         fluidFolder.add(rippleUniforms.uDamping, 'value', 0.8, 0.999, 0.001).name('damping');
         fluidFolder.add(rippleUniforms.uBrushSize, 'value', 0.01, 0.2, 0.001).name('brush size');
+        fluidFolder.add(rippleUniforms.uTrailPersistence, 'value', 0.8, 0.999, 0.001).name('trail');
 
         const displacementFolder = gui.addFolder('Displacement');
         controllers.noiseType = displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
@@ -609,7 +620,6 @@ const ShaderCanvas: React.FC = () => {
             uniforms.uTime.value = elapsedTime;
             
             // Update fluid sim mouse
-            rippleUniforms.uPrevMouse.value.copy(rippleUniforms.uMouse.value);
             rippleUniforms.uMouse.value.copy(fluidMousePosition);
 
             // Ping-pong rendering for fluid simulation
