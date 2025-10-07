@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react';
-import * as THREE from 'three';
-import GUI, { Controller } from 'lil-gui';
+import type * as THREE from 'three';
+import type GUI from 'lil-gui';
+import type { Controller } from 'lil-gui';
 
 // From types.ts
 export interface ShaderUniforms {
@@ -462,435 +463,404 @@ const ShaderCanvas: React.FC = () => {
     const presetsRef = useRef<Presets>(JSON.parse(JSON.stringify(defaultPresets)));
     
     useEffect(() => {
-        if (!mountRef.current) return;
-
-        const isMobile = window.innerWidth < 768;
-        const perfParams = { quality: (isMobile ? 'Low' : 'High') as Quality };
-        let settings = qualitySettings[perfParams.quality];
-        
-        let lastAppliedPreset: Preset = presetsRef.current["Serene Twilight"];
-
         const currentMount = mountRef.current;
-        const scene = new THREE.Scene();
-        const sizes = { width: currentMount.clientWidth, height: currentMount.clientHeight };
-        const camera = new THREE.PerspectiveCamera(75, sizes.width / sizes.height, 0.1, 100);
-        camera.position.set(0, 0, 1.8);
-        scene.add(camera);
-        
-        const renderer = new THREE.WebGLRenderer({ 
-            antialias: settings.antialias, 
-            alpha: true,
-            powerPreference: 'high-performance'
-        });
-        renderer.setSize(sizes.width, sizes.height);
-        renderer.setPixelRatio(settings.pixelRatio);
-        currentMount.appendChild(renderer.domElement);
+        if (!currentMount) return;
 
-        // Fluid Simulation Setup
-        const fluidScene = new THREE.Scene();
-        const fluidCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-        const fluidGeometry = new THREE.PlaneGeometry(2, 2);
-        let fbo1 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
-        let fbo2 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
-        
-        const fluidParams = { strength: 0.15, damping: 0.985, brushSize: 0.08, trail: 0.95 };
+        let doCleanup: () => void = () => {};
 
-        const rippleUniforms = {
-            uPrevTexture: { value: null },
-            uMouse: { value: new THREE.Vector2(0.5, 0.5) },
-            uBrushSize: { value: fluidParams.brushSize },
-            uDamping: { value: fluidParams.damping },
-            uTrailPersistence: { value: fluidParams.trail },
-            uTexelSize: { value: new THREE.Vector2(1 / settings.fboResolution, 1 / settings.fboResolution) }
-        };
-        const rippleMaterial = new THREE.ShaderMaterial({
-            vertexShader: rippleVertexShader,
-            fragmentShader: rippleFragmentShader,
-            uniforms: rippleUniforms
-        });
-        const fluidMesh = new THREE.Mesh(fluidGeometry, rippleMaterial);
-        fluidScene.add(fluidMesh);
+        const init = async () => {
+            const THREE = await import('three');
+            const { default: GUI } = await import('lil-gui');
 
-        const displacementParams = { type: 'Simplex' };
-        const noiseTypes = { Perlin: 0, Simplex: 1, Worley: 2, FBM: 3, Smooth: 4 };
-        
-        const colorParams = {
-            depthColor: '#d1e0ff',
-            surfaceColor: '#fff4e0',
-        };
+            const isMobile = window.innerWidth < 768;
+            const perfParams = { quality: (isMobile ? 'Low' : 'High') as Quality };
+            let settings = qualitySettings[perfParams.quality];
+            
+            let lastAppliedPreset: Preset = presetsRef.current["Serene Twilight"];
 
-        const uniforms: ShaderUniforms = {
-            uTime: { value: 0 },
-            uMouse: { value: { x: 9999, y: 9999 } },
-            uCameraAspect: { value: camera.aspect },
-            uNoiseType: { value: noiseTypes.Simplex },
-            uBigWavesElevation: { value: 0.08 }, uBigWavesFrequency: { value: { x: 0.6, y: 0.4 } }, uBigWavesSpeed: { value: 0.04 },
-            uSmallWavesElevation: { value: 0.06 }, uSmallWavesFrequency: { value: 2.0 }, uSmallWavesSpeed: { value: 0.15 }, uSmallWavesIterations: { value: 3.0 },
-            uDepthColor: { value: new THREE.Color(colorParams.depthColor) },
-            uSurfaceColor: { value: new THREE.Color(colorParams.surfaceColor) },
-            uColorOffset: { value: 0.3 },
-            uColorMultiplier: { value: 2.5 },
-            uDisplacementMap: { value: null },
-            uRippleStrength: { value: fluidParams.strength }
-        };
-
-        const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
-        const geometry = new THREE.PlaneGeometry(4.5, 4.5, settings.geometrySegments, settings.geometrySegments);
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.rotation.x = -Math.PI * 0.35;
-        scene.add(mesh);
-
-        // Post-processing setup
-        const postScene = new THREE.Scene();
-        const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-        const postGeometry = new THREE.PlaneGeometry(2, 2);
-
-        let sceneFBO = new THREE.WebGLRenderTarget(sizes.width, sizes.height, { type: THREE.FloatType });
-        let blurFBO1 = new THREE.WebGLRenderTarget(sizes.width / settings.blurDownsample, sizes.height / settings.blurDownsample, { type: THREE.FloatType });
-        let blurFBO2 = new THREE.WebGLRenderTarget(sizes.width / settings.blurDownsample, sizes.height / settings.blurDownsample, { type: THREE.FloatType });
-
-        const blurHorizontalMaterial = new THREE.ShaderMaterial({
-            vertexShader: postVertexShader,
-            fragmentShader: blurFragmentShader,
-            uniforms: {
-                uTexture: { value: null },
-                uDirection: { value: new THREE.Vector2(1 / (sizes.width / settings.blurDownsample), 0) }
-            }
-        });
-        const blurVerticalMaterial = new THREE.ShaderMaterial({
-            vertexShader: postVertexShader,
-            fragmentShader: blurFragmentShader,
-            uniforms: {
-                uTexture: { value: null },
-                uDirection: { value: new THREE.Vector2(0, 1 / (sizes.height / settings.blurDownsample)) }
-            }
-        });
-        const compositeMaterial = new THREE.ShaderMaterial({
-            vertexShader: postVertexShader,
-            fragmentShader: compositeFragmentShader,
-            uniforms: {
-                uSceneTexture: { value: null },
-                uBlurTexture: { value: null },
-                uIntensity: { value: 1.0 },
-                uNoiseAlpha: { value: 0.05 },
-                uTime: { value: 0 }
-            }
-        });
-        const postMesh = new THREE.Mesh(postGeometry, compositeMaterial);
-        postScene.add(postMesh);
-        
-        const gui = new GUI();
-        const controllers: { [key: string]: Controller } = {};
-        
-        const applyPreset = (preset: Preset) => {
-            lastAppliedPreset = preset;
-            const noiseTypeName = Object.keys(noiseTypes).find(key => noiseTypes[key as keyof typeof noiseTypes] === preset.noiseType) || 'Simplex';
-            controllers.noiseType.setValue(noiseTypeName);
-            controllers.bigWavesElevation.setValue(preset.uBigWavesElevation);
-            controllers.bigWavesFrequencyX.setValue(preset.uBigWavesFrequency.x);
-            controllers.bigWavesFrequencyY.setValue(preset.uBigWavesFrequency.y);
-            controllers.bigWavesSpeed.setValue(preset.uBigWavesSpeed);
-            controllers.smallWavesElevation.setValue(preset.uSmallWavesElevation);
-            controllers.smallWavesFrequency.setValue(preset.uSmallWavesFrequency);
-            controllers.smallWavesSpeed.setValue(preset.uSmallWavesSpeed);
-            let iterations = preset.uSmallWavesIterations;
-            if (perfParams.quality === 'Low') {
-                iterations = Math.min(preset.uSmallWavesIterations, 2.0);
-            }
-            controllers.smallWavesIterations.setValue(iterations);
-            controllers.colorOffset.setValue(preset.uColorOffset);
-            controllers.colorMultiplier.setValue(preset.uColorMultiplier);
-            controllers.depthColor.setValue(preset.depthColor);
-            controllers.surfaceColor.setValue(preset.surfaceColor);
-            controllers.blurIntensity.setValue(preset.blurIntensity);
-        };
-
-        let presetsFolder: GUI;
-        const rebuildPresetsFolder = (currentPresets: Presets) => {
-            if (presetsFolder) {
-                presetsFolder.destroy();
-            }
-            presetsFolder = gui.addFolder('Presets');
-            const presetFunctions = Object.fromEntries(Object.entries(currentPresets).map(([name, preset]) => [name, () => applyPreset(preset)]));
-            for (const key in presetFunctions) {
-                presetsFolder.add(presetFunctions, key);
-            }
-            presetsFolder.open();
-        };
-        
-        const ioControls = {
-            exportPresets: () => {
-                const json = JSON.stringify(presetsRef.current, null, 2);
-                const blob = new Blob([json], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'fluidum-presets.json';
-                a.click();
-                URL.revokeObjectURL(url);
-            },
-            importPresets: () => {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.json';
-                input.onchange = (event) => {
-                    const file = (event.target as HTMLInputElement).files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        try {
-                            const newPresets = JSON.parse(e.target?.result as string);
-                            if (typeof newPresets === 'object' && newPresets !== null) {
-                                presetsRef.current = newPresets;
-                                rebuildPresetsFolder(presetsRef.current);
-                                const firstPreset = Object.values(presetsRef.current)[0] as Preset;
-                                if (firstPreset) applyPreset(firstPreset);
-                            } else {
-                                alert('Invalid presets file format.');
-                            }
-                        } catch (error) {
-                            alert('Error parsing presets file.');
-                        }
-                    };
-                    reader.readAsText(file);
-                };
-                input.click();
-            }
-        };
-
-        const perfFolder = gui.addFolder('Performance');
-        perfFolder.add(perfParams, 'quality', ['High', 'Low']).name('Quality').onChange((value: Quality) => {
-            settings = qualitySettings[value];
-            renderer.setPixelRatio(settings.pixelRatio);
-            fbo1.setSize(settings.fboResolution, settings.fboResolution);
-            fbo2.setSize(settings.fboResolution, settings.fboResolution);
-            rippleUniforms.uTexelSize.value.set(1 / settings.fboResolution, 1 / settings.fboResolution);
-            // Re-apply preset to update iterations based on new quality
-            applyPreset(lastAppliedPreset);
-            // Manually trigger resize to update blur buffers
-            handleResize();
-        });
-        perfFolder.open();
-
-        gui.add(ioControls, 'importPresets').name('Import Presets');
-        gui.add(ioControls, 'exportPresets').name('Export Presets');
-        
-        rebuildPresetsFolder(presetsRef.current);
-
-        const blurFolder = gui.addFolder('Ethereal Blur');
-        controllers.blurIntensity = blurFolder.add(compositeMaterial.uniforms.uIntensity, 'value', 0, 2, 0.01).name('intensity');
-
-        const filmGrainFolder = gui.addFolder('Film Grain');
-        filmGrainFolder.add(compositeMaterial.uniforms.uNoiseAlpha, 'value', 0, 0.2, 0.001).name('intensity');
-        
-        const fluidFolder = gui.addFolder('Cursor Ripples');
-        fluidFolder.add(uniforms.uRippleStrength, 'value', 0, 0.5, 0.005).name('strength');
-        fluidFolder.add(rippleUniforms.uDamping, 'value', 0.8, 0.999, 0.001).name('damping');
-        fluidFolder.add(rippleUniforms.uBrushSize, 'value', 0.01, 0.2, 0.001).name('brush size');
-        fluidFolder.add(rippleUniforms.uTrailPersistence, 'value', 0.8, 0.999, 0.001).name('trail');
-
-        const displacementFolder = gui.addFolder('Displacement');
-        controllers.noiseType = displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
-            uniforms.uNoiseType.value = noiseTypes[value as keyof typeof noiseTypes];
-        });
-
-        const waveFolder = gui.addFolder('Large Waves');
-        controllers.bigWavesElevation = waveFolder.add(uniforms.uBigWavesElevation, 'value', 0, 0.5, 0.001).name('elevation');
-        controllers.bigWavesFrequencyX = waveFolder.add(uniforms.uBigWavesFrequency.value, 'x', 0, 5, 0.01).name('frequencyX');
-        controllers.bigWavesFrequencyY = waveFolder.add(uniforms.uBigWavesFrequency.value, 'y', 0, 5, 0.01).name('frequencyY');
-        controllers.bigWavesSpeed = waveFolder.add(uniforms.uBigWavesSpeed, 'value', 0, 1, 0.005).name('speed');
-        
-        const smallWaveFolder = gui.addFolder('Fine Ripples');
-        controllers.smallWavesElevation = smallWaveFolder.add(uniforms.uSmallWavesElevation, 'value', 0, 0.3, 0.001).name('elevation');
-        controllers.smallWavesFrequency = smallWaveFolder.add(uniforms.uSmallWavesFrequency, 'value', 0, 20, 0.01).name('frequency');
-        controllers.smallWavesSpeed = smallWaveFolder.add(uniforms.uSmallWavesSpeed, 'value', 0, 1, 0.005).name('speed');
-        controllers.smallWavesIterations = smallWaveFolder.add(uniforms.uSmallWavesIterations, 'value', 1, 8, 1).name('iterations');
-
-        const colorFolder = gui.addFolder('Colors');
-        controllers.depthColor = colorFolder.addColor(colorParams, 'depthColor').name('depth').onChange((value: string) => {
-            uniforms.uDepthColor.value.set(value);
-        });
-        controllers.surfaceColor = colorFolder.addColor(colorParams, 'surfaceColor').name('surface').onChange((value: string) => {
-            uniforms.uSurfaceColor.value.set(value);
-        });
-        controllers.colorOffset = colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
-        controllers.colorMultiplier = colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
-
-        blurFolder.close();
-        filmGrainFolder.close();
-        fluidFolder.close();
-        displacementFolder.close();
-        waveFolder.close();
-        smallWaveFolder.close();
-        colorFolder.close();
-
-        applyPreset(presetsRef.current["Serene Twilight"]);
-
-        const fluidMousePosition = new THREE.Vector2(0.5, 0.5);
-        const handleMouseMove = (event: MouseEvent) => {
-            fluidMousePosition.x = event.clientX / sizes.width;
-            fluidMousePosition.y = 1.0 - (event.clientY / sizes.height);
-        };
-        const handleResize = () => {
-            sizes.width = currentMount.clientWidth;
-            sizes.height = currentMount.clientHeight;
-            camera.aspect = sizes.width / sizes.height;
-            camera.updateProjectionMatrix();
+            const scene = new THREE.Scene();
+            const sizes = { width: currentMount.clientWidth, height: currentMount.clientHeight };
+            const camera = new THREE.PerspectiveCamera(75, sizes.width / sizes.height, 0.1, 100);
+            camera.position.set(0, 0, 1.8);
+            scene.add(camera);
+            
+            const renderer = new THREE.WebGLRenderer({ 
+                antialias: settings.antialias, 
+                alpha: true,
+                powerPreference: 'high-performance'
+            });
             renderer.setSize(sizes.width, sizes.height);
-            renderer.setPixelRatio(qualitySettings[perfParams.quality].pixelRatio);
-            uniforms.uCameraAspect.value = camera.aspect;
+            renderer.setPixelRatio(settings.pixelRatio);
+            currentMount.appendChild(renderer.domElement);
 
-            // Update post-processing FBOs
-            const blurDownsample = settings.blurDownsample;
-            sceneFBO.setSize(sizes.width, sizes.height);
-            blurFBO1.setSize(sizes.width / blurDownsample, sizes.height / blurDownsample);
-            blurFBO2.setSize(sizes.width / blurDownsample, sizes.height / blurDownsample);
-            blurHorizontalMaterial.uniforms.uDirection.value.set(1 / (sizes.width / blurDownsample), 0);
-            blurVerticalMaterial.uniforms.uDirection.value.set(0, 1 / (sizes.height / blurDownsample));
+            // Fluid Simulation Setup
+            const fluidScene = new THREE.Scene();
+            const fluidCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            const fluidGeometry = new THREE.PlaneGeometry(2, 2);
+            let fbo1 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
+            let fbo2 = new THREE.WebGLRenderTarget(settings.fboResolution, settings.fboResolution, { type: THREE.FloatType });
+            
+            const fluidParams = { strength: 0.15, damping: 0.985, brushSize: 0.08, trail: 0.95 };
+
+            const rippleUniforms = {
+                uPrevTexture: { value: null },
+                uMouse: { value: new THREE.Vector2(0.5, 0.5) },
+                uBrushSize: { value: fluidParams.brushSize },
+                uDamping: { value: fluidParams.damping },
+                uTrailPersistence: { value: fluidParams.trail },
+                uTexelSize: { value: new THREE.Vector2(1 / settings.fboResolution, 1 / settings.fboResolution) }
+            };
+            const rippleMaterial = new THREE.ShaderMaterial({
+                vertexShader: rippleVertexShader,
+                fragmentShader: rippleFragmentShader,
+                uniforms: rippleUniforms
+            });
+            const fluidMesh = new THREE.Mesh(fluidGeometry, rippleMaterial);
+            fluidScene.add(fluidMesh);
+
+            const displacementParams = { type: 'Simplex' };
+            const noiseTypes = { Perlin: 0, Simplex: 1, Worley: 2, FBM: 3, Smooth: 4 };
+            
+            const colorParams = {
+                depthColor: '#d1e0ff',
+                surfaceColor: '#fff4e0',
+            };
+
+            const uniforms: ShaderUniforms = {
+                uTime: { value: 0 },
+                uMouse: { value: { x: 9999, y: 9999 } },
+                uCameraAspect: { value: camera.aspect },
+                uNoiseType: { value: noiseTypes.Simplex },
+                uBigWavesElevation: { value: 0.08 }, uBigWavesFrequency: { value: { x: 0.6, y: 0.4 } }, uBigWavesSpeed: { value: 0.04 },
+                uSmallWavesElevation: { value: 0.06 }, uSmallWavesFrequency: { value: 2.0 }, uSmallWavesSpeed: { value: 0.15 }, uSmallWavesIterations: { value: 3.0 },
+                uDepthColor: { value: new THREE.Color(colorParams.depthColor) },
+                uSurfaceColor: { value: new THREE.Color(colorParams.surfaceColor) },
+                uColorOffset: { value: 0.3 },
+                uColorMultiplier: { value: 2.5 },
+                uDisplacementMap: { value: null },
+                uRippleStrength: { value: fluidParams.strength }
+            };
+
+            const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
+            const geometry = new THREE.PlaneGeometry(4.5, 4.5, settings.geometrySegments, settings.geometrySegments);
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.rotation.x = -Math.PI * 0.35;
+            scene.add(mesh);
+
+            // Post-processing setup
+            const postScene = new THREE.Scene();
+            const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            const postGeometry = new THREE.PlaneGeometry(2, 2);
+
+            let sceneFBO = new THREE.WebGLRenderTarget(sizes.width, sizes.height, { type: THREE.FloatType });
+            let blurFBO1 = new THREE.WebGLRenderTarget(sizes.width / settings.blurDownsample, sizes.height / settings.blurDownsample, { type: THREE.FloatType });
+            let blurFBO2 = new THREE.WebGLRenderTarget(sizes.width / settings.blurDownsample, sizes.height / settings.blurDownsample, { type: THREE.FloatType });
+
+            const blurHorizontalMaterial = new THREE.ShaderMaterial({
+                vertexShader: postVertexShader,
+                fragmentShader: blurFragmentShader,
+                uniforms: {
+                    uTexture: { value: null },
+                    uDirection: { value: new THREE.Vector2(1 / (sizes.width / settings.blurDownsample), 0) }
+                }
+            });
+            const blurVerticalMaterial = new THREE.ShaderMaterial({
+                vertexShader: postVertexShader,
+                fragmentShader: blurFragmentShader,
+                uniforms: {
+                    uTexture: { value: null },
+                    uDirection: { value: new THREE.Vector2(0, 1 / (sizes.height / settings.blurDownsample)) }
+                }
+            });
+            const compositeMaterial = new THREE.ShaderMaterial({
+                vertexShader: postVertexShader,
+                fragmentShader: compositeFragmentShader,
+                uniforms: {
+                    uSceneTexture: { value: null },
+                    uBlurTexture: { value: null },
+                    uIntensity: { value: 1.0 },
+                    uNoiseAlpha: { value: 0.05 },
+                    uTime: { value: 0 }
+                }
+            });
+            const postMesh = new THREE.Mesh(postGeometry, compositeMaterial);
+            postScene.add(postMesh);
+            
+            const gui = new GUI();
+            const controllers: { [key: string]: Controller } = {};
+            
+            const applyPreset = (preset: Preset) => {
+                lastAppliedPreset = preset;
+                const noiseTypeName = Object.keys(noiseTypes).find(key => noiseTypes[key as keyof typeof noiseTypes] === preset.noiseType) || 'Simplex';
+                controllers.noiseType.setValue(noiseTypeName);
+                controllers.bigWavesElevation.setValue(preset.uBigWavesElevation);
+                controllers.bigWavesFrequencyX.setValue(preset.uBigWavesFrequency.x);
+                controllers.bigWavesFrequencyY.setValue(preset.uBigWavesFrequency.y);
+                controllers.bigWavesSpeed.setValue(preset.uBigWavesSpeed);
+                controllers.smallWavesElevation.setValue(preset.uSmallWavesElevation);
+                controllers.smallWavesFrequency.setValue(preset.uSmallWavesFrequency);
+                controllers.smallWavesSpeed.setValue(preset.uSmallWavesSpeed);
+                let iterations = preset.uSmallWavesIterations;
+                if (perfParams.quality === 'Low') {
+                    iterations = Math.min(preset.uSmallWavesIterations, 2.0);
+                }
+                controllers.smallWavesIterations.setValue(iterations);
+                controllers.colorOffset.setValue(preset.uColorOffset);
+                controllers.colorMultiplier.setValue(preset.uColorMultiplier);
+                controllers.depthColor.setValue(preset.depthColor);
+                controllers.surfaceColor.setValue(preset.surfaceColor);
+                controllers.blurIntensity.setValue(preset.blurIntensity);
+            };
+
+            let presetsFolder: GUI;
+            const rebuildPresetsFolder = (currentPresets: Presets) => {
+                if (presetsFolder) {
+                    presetsFolder.destroy();
+                }
+                presetsFolder = gui.addFolder('Presets');
+                const presetFunctions = Object.fromEntries(Object.entries(currentPresets).map(([name, preset]) => [name, () => applyPreset(preset)]));
+                for (const key in presetFunctions) {
+                    presetsFolder.add(presetFunctions, key);
+                }
+                presetsFolder.open();
+            };
+            
+            const ioControls = {
+                exportPresets: () => {
+                    const json = JSON.stringify(presetsRef.current, null, 2);
+                    const blob = new Blob([json], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'fluidum-presets.json';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                },
+                importPresets: () => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = '.json';
+                    input.onchange = (event) => {
+                        const file = (event.target as HTMLInputElement).files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            try {
+                                const newPresets = JSON.parse(e.target?.result as string);
+                                if (typeof newPresets === 'object' && newPresets !== null) {
+                                    presetsRef.current = newPresets;
+                                    rebuildPresetsFolder(presetsRef.current);
+                                    const firstPreset = Object.values(presetsRef.current)[0] as Preset;
+                                    if (firstPreset) applyPreset(firstPreset);
+                                } else {
+                                    alert('Invalid presets file format.');
+                                }
+                            } catch (error) {
+                                alert('Error parsing presets file.');
+                            }
+                        };
+                        reader.readAsText(file);
+                    };
+                    input.click();
+                }
+            };
+
+            const perfFolder = gui.addFolder('Performance');
+            perfFolder.add(perfParams, 'quality', ['High', 'Low']).name('Quality').onChange((value: Quality) => {
+                settings = qualitySettings[value];
+                renderer.setPixelRatio(settings.pixelRatio);
+                fbo1.setSize(settings.fboResolution, settings.fboResolution);
+                fbo2.setSize(settings.fboResolution, settings.fboResolution);
+                rippleUniforms.uTexelSize.value.set(1 / settings.fboResolution, 1 / settings.fboResolution);
+                // Re-apply preset to update iterations based on new quality
+                applyPreset(lastAppliedPreset);
+                // Manually trigger resize to update blur buffers
+                handleResize();
+            });
+            perfFolder.open();
+
+            gui.add(ioControls, 'importPresets').name('Import Presets');
+            gui.add(ioControls, 'exportPresets').name('Export Presets');
+            
+            rebuildPresetsFolder(presetsRef.current);
+
+            const blurFolder = gui.addFolder('Ethereal Blur');
+            controllers.blurIntensity = blurFolder.add(compositeMaterial.uniforms.uIntensity, 'value', 0, 2, 0.01).name('intensity');
+
+            const filmGrainFolder = gui.addFolder('Film Grain');
+            filmGrainFolder.add(compositeMaterial.uniforms.uNoiseAlpha, 'value', 0, 0.2, 0.001).name('intensity');
+            
+            const fluidFolder = gui.addFolder('Cursor Ripples');
+            fluidFolder.add(uniforms.uRippleStrength, 'value', 0, 0.5, 0.005).name('strength');
+            fluidFolder.add(rippleUniforms.uDamping, 'value', 0.8, 0.999, 0.001).name('damping');
+            fluidFolder.add(rippleUniforms.uBrushSize, 'value', 0.01, 0.2, 0.001).name('brush size');
+            fluidFolder.add(rippleUniforms.uTrailPersistence, 'value', 0.8, 0.999, 0.001).name('trail');
+
+            const displacementFolder = gui.addFolder('Displacement');
+            controllers.noiseType = displacementFolder.add(displacementParams, 'type', ['Perlin', 'Simplex', 'Worley', 'FBM', 'Smooth']).name('algorithm').onChange((value: string) => {
+                uniforms.uNoiseType.value = noiseTypes[value as keyof typeof noiseTypes];
+            });
+
+            const waveFolder = gui.addFolder('Large Waves');
+            controllers.bigWavesElevation = waveFolder.add(uniforms.uBigWavesElevation, 'value', 0, 0.5, 0.001).name('elevation');
+            controllers.bigWavesFrequencyX = waveFolder.add(uniforms.uBigWavesFrequency.value, 'x', 0, 5, 0.01).name('frequencyX');
+            controllers.bigWavesFrequencyY = waveFolder.add(uniforms.uBigWavesFrequency.value, 'y', 0, 5, 0.01).name('frequencyY');
+            controllers.bigWavesSpeed = waveFolder.add(uniforms.uBigWavesSpeed, 'value', 0, 1, 0.005).name('speed');
+            
+            const smallWaveFolder = gui.addFolder('Fine Ripples');
+            controllers.smallWavesElevation = smallWaveFolder.add(uniforms.uSmallWavesElevation, 'value', 0, 0.3, 0.001).name('elevation');
+            controllers.smallWavesFrequency = smallWaveFolder.add(uniforms.uSmallWavesFrequency, 'value', 0, 20, 0.01).name('frequency');
+            controllers.smallWavesSpeed = smallWaveFolder.add(uniforms.uSmallWavesSpeed, 'value', 0, 1, 0.005).name('speed');
+            controllers.smallWavesIterations = smallWaveFolder.add(uniforms.uSmallWavesIterations, 'value', 1, 8, 1).name('iterations');
+
+            const colorFolder = gui.addFolder('Colors');
+            controllers.depthColor = colorFolder.addColor(colorParams, 'depthColor').name('depth').onChange((value: string) => {
+                uniforms.uDepthColor.value.set(value);
+            });
+            controllers.surfaceColor = colorFolder.addColor(colorParams, 'surfaceColor').name('surface').onChange((value: string) => {
+                uniforms.uSurfaceColor.value.set(value);
+            });
+            controllers.colorOffset = colorFolder.add(uniforms.uColorOffset, 'value', 0, 1, 0.001).name('offset');
+            controllers.colorMultiplier = colorFolder.add(uniforms.uColorMultiplier, 'value', 0, 10, 0.01).name('multiplier');
+
+            blurFolder.close();
+            filmGrainFolder.close();
+            fluidFolder.close();
+            displacementFolder.close();
+            waveFolder.close();
+            smallWaveFolder.close();
+            colorFolder.close();
+
+            applyPreset(presetsRef.current["Serene Twilight"]);
+
+            const fluidMousePosition = new THREE.Vector2(0.5, 0.5);
+            const handleMouseMove = (event: MouseEvent) => {
+                fluidMousePosition.x = event.clientX / sizes.width;
+                fluidMousePosition.y = 1.0 - (event.clientY / sizes.height);
+            };
+            const handleResize = () => {
+                sizes.width = currentMount.clientWidth;
+                sizes.height = currentMount.clientHeight;
+                camera.aspect = sizes.width / sizes.height;
+                camera.updateProjectionMatrix();
+                renderer.setSize(sizes.width, sizes.height);
+                renderer.setPixelRatio(qualitySettings[perfParams.quality].pixelRatio);
+                uniforms.uCameraAspect.value = camera.aspect;
+
+                // Update post-processing FBOs
+                const blurDownsample = settings.blurDownsample;
+                sceneFBO.setSize(sizes.width, sizes.height);
+                blurFBO1.setSize(sizes.width / blurDownsample, sizes.height / blurDownsample);
+                blurFBO2.setSize(sizes.width / blurDownsample, sizes.height / blurDownsample);
+                blurHorizontalMaterial.uniforms.uDirection.value.set(1 / (sizes.width / blurDownsample), 0);
+                blurVerticalMaterial.uniforms.uDirection.value.set(0, 1 / (sizes.height / blurDownsample));
+            };
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('resize', handleResize);
+
+            const clock = new THREE.Clock();
+            let animationFrameId: number;
+            const tick = () => {
+                const elapsedTime = clock.getElapsedTime();
+                uniforms.uTime.value = elapsedTime;
+                compositeMaterial.uniforms.uTime.value = elapsedTime;
+                
+                // Update fluid sim mouse
+                rippleUniforms.uMouse.value.copy(fluidMousePosition);
+
+                // Ping-pong rendering for fluid simulation
+                renderer.setRenderTarget(fbo2);
+                rippleUniforms.uPrevTexture.value = fbo1.texture;
+                renderer.render(fluidScene, fluidCamera);
+                
+                const temp = fbo1;
+                fbo1 = fbo2;
+                fbo2 = temp;
+
+                // --- Post-processing ---
+                // 1. Render main scene to texture
+                renderer.setRenderTarget(sceneFBO);
+                uniforms.uDisplacementMap.value = fbo1.texture;
+                renderer.render(scene, camera);
+
+                // 2. Horizontal Blur Pass
+                postMesh.material = blurHorizontalMaterial;
+                blurHorizontalMaterial.uniforms.uTexture.value = sceneFBO.texture;
+                renderer.setRenderTarget(blurFBO1);
+                renderer.render(postScene, postCamera);
+
+                // 3. Vertical Blur Pass
+                postMesh.material = blurVerticalMaterial;
+                blurVerticalMaterial.uniforms.uTexture.value = blurFBO1.texture;
+                renderer.setRenderTarget(blurFBO2);
+                renderer.render(postScene, postCamera);
+
+                // 4. Composite to screen
+                postMesh.material = compositeMaterial;
+                compositeMaterial.uniforms.uSceneTexture.value = sceneFBO.texture;
+                compositeMaterial.uniforms.uBlurTexture.value = blurFBO2.texture;
+                renderer.setRenderTarget(null);
+                renderer.render(postScene, postCamera);
+                
+                animationFrameId = window.requestAnimationFrame(tick);
+            };
+            tick();
+            
+            doCleanup = () => {
+                window.removeEventListener('resize', handleResize);
+                window.removeEventListener('mousemove', handleMouseMove);
+                window.cancelAnimationFrame(animationFrameId);
+                renderer.dispose();
+                geometry.dispose();
+                material.dispose();
+                fluidGeometry.dispose();
+                rippleMaterial.dispose();
+                fbo1.dispose();
+                fbo2.dispose();
+                // Dispose post-processing resources
+                sceneFBO.dispose();
+                blurFBO1.dispose();
+                blurFBO2.dispose();
+                postGeometry.dispose();
+                blurHorizontalMaterial.dispose();
+                blurVerticalMaterial.dispose();
+                compositeMaterial.dispose();
+                gui.destroy();
+                if (currentMount && renderer.domElement) {
+                    currentMount.removeChild(renderer.domElement);
+                }
+            };
         };
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('resize', handleResize);
 
-        const clock = new THREE.Clock();
-        let animationFrameId: number;
-        const tick = () => {
-            const elapsedTime = clock.getElapsedTime();
-            uniforms.uTime.value = elapsedTime;
-            compositeMaterial.uniforms.uTime.value = elapsedTime;
-            
-            // Update fluid sim mouse
-            rippleUniforms.uMouse.value.copy(fluidMousePosition);
-
-            // Ping-pong rendering for fluid simulation
-            renderer.setRenderTarget(fbo2);
-            rippleUniforms.uPrevTexture.value = fbo1.texture;
-            renderer.render(fluidScene, fluidCamera);
-            
-            const temp = fbo1;
-            fbo1 = fbo2;
-            fbo2 = temp;
-
-            // --- Post-processing ---
-            // 1. Render main scene to texture
-            renderer.setRenderTarget(sceneFBO);
-            uniforms.uDisplacementMap.value = fbo1.texture;
-            renderer.render(scene, camera);
-
-            // 2. Horizontal Blur Pass
-            postMesh.material = blurHorizontalMaterial;
-            blurHorizontalMaterial.uniforms.uTexture.value = sceneFBO.texture;
-            renderer.setRenderTarget(blurFBO1);
-            renderer.render(postScene, postCamera);
-
-            // 3. Vertical Blur Pass
-            postMesh.material = blurVerticalMaterial;
-            blurVerticalMaterial.uniforms.uTexture.value = blurFBO1.texture;
-            renderer.setRenderTarget(blurFBO2);
-            renderer.render(postScene, postCamera);
-
-            // 4. Composite to screen
-            postMesh.material = compositeMaterial;
-            compositeMaterial.uniforms.uSceneTexture.value = sceneFBO.texture;
-            compositeMaterial.uniforms.uBlurTexture.value = blurFBO2.texture;
-            renderer.setRenderTarget(null);
-            renderer.render(postScene, postCamera);
-            
-            animationFrameId = window.requestAnimationFrame(tick);
-        };
-        tick();
+        init();
         
         return () => {
-            window.removeEventListener('resize', handleResize);
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.cancelAnimationFrame(animationFrameId);
-            renderer.dispose();
-            geometry.dispose();
-            material.dispose();
-            fluidGeometry.dispose();
-            rippleMaterial.dispose();
-            fbo1.dispose();
-            fbo2.dispose();
-            // Dispose post-processing resources
-            sceneFBO.dispose();
-            blurFBO1.dispose();
-            blurFBO2.dispose();
-            postGeometry.dispose();
-            blurHorizontalMaterial.dispose();
-            blurVerticalMaterial.dispose();
-            compositeMaterial.dispose();
-            gui.destroy();
-            if (currentMount && renderer.domElement) {
-                currentMount.removeChild(renderer.domElement);
-            }
+            doCleanup();
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     return <div ref={mountRef} className="absolute top-0 left-0 w-full h-full" />;
 };
 
-const StyleInjector: React.FC = () => (
-  <style dangerouslySetInnerHTML={{ __html: `
-    body {
-      font-family: 'Manrope', sans-serif;
-      background-color: #0A0A0A;
-      color: #F5F5F5;
-      overflow: hidden; /* Prevent scrollbars */
-    }
-    /* lil-gui custom styling for a smooth, clean aesthetic */
-    .lil-gui.root {
-      --widget-color: #EAEAEA;
-      --background-color: rgba(10, 10, 10, 0.7);
-      --text-color: #EAEAEA;
-      --title-background-color: rgba(0, 0, 0, 0.2);
-      --font-size: 12px;
-      --input-font-size: 12px;
-      --border-radius: 12px;
-      --padding: 12px;
-      --widget-height: 24px;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    .lil-gui.root .title {
-      color: #ffffff;
-      font-weight: bold;
-      letter-spacing: 0.5px;
-    }
-    .lil-gui .controller:not(.disabled) .name {
-       color: #a0a0a0;
-       font-weight: 300;
-    }
-    .lil-gui--width-goto {
-      right: 0 !important;
-    }
-    .lil-gui .controller.string input, .lil-gui .controller.number input {
-      border-radius: 6px;
-      background: rgba(0,0,0,0.3);
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-     .lil-gui .controller > .widget {
-      border-radius: 6px;
-    }
-  `}} />
-);
-
 export default function Clarity(props: {}) {
+  const [isClient, setIsClient] = React.useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+  
   return (
-    <>
-      <StyleInjector />
-      <main className="relative w-screen h-screen bg-transparent overflow-hidden">
-        <ShaderCanvas />
-        <div className="absolute top-0 left-0 w-full h-full pointer-events-none flex flex-col justify-between p-8 md:p-12">
-            <header>
-                <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>Fluidum</h1>
-                <p className="text-sm text-gray-200 font-light tracking-wide" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>A canvas of liquid light.</p>
-            </header>
-            <footer className="text-center">
-                <p className="text-xs text-gray-400 font-light tracking-wide" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>Interact with your cursor. Explore the presets.</p>
-            </footer>
-        </div>
-      </main>
-    </>
+    <main className="relative w-screen h-screen bg-transparent overflow-hidden">
+      {isClient && <ShaderCanvas />}
+      <div className="absolute top-0 left-0 w-full h-full pointer-events-none flex flex-col justify-between p-8 md:p-12">
+          <header>
+              <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>Fluidum</h1>
+              <p className="text-sm text-gray-200 font-light tracking-wide" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>A canvas of liquid light.</p>
+          </header>
+          <footer className="text-center">
+              <p className="text-xs text-gray-400 font-light tracking-wide" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}>Interact with your cursor. Explore the presets.</p>
+          </footer>
+      </div>
+    </main>
   );
 };
